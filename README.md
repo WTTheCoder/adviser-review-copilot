@@ -32,6 +32,8 @@ npm run build
 
 `npm run dev` starts both the frontend and backend.
 
+GitHub Actions runs lint, type checking, tests, and production builds for pushes and pull requests targeting `main`.
+
 ## Local URLs
 
 - Web app: `http://localhost:5173`
