@@ -4,7 +4,9 @@ Client Review Prep Agent is a prototype for financial advisers preparing annual 
 
 ## Current Milestone
 
-Phase 1 creates a clean frontend/backend foundation only. It includes a React web app, a Fastify API, and shared TypeScript/Zod health response definitions. PostgreSQL, OpenAI integration, document ingestion, and review workflow features will be added in later milestones.
+Phase 2 adds a static, deterministic adviser-review demonstration for a fictional client, Alex Taylor. The demo shows how source records can be reconciled into a current client picture, how superseded information remains visible as history, and how adviser approval is requested for unverified or high-impact changes.
+
+The workflow is presentation-focused only. It does not call AI, update a production CRM, generate financial advice, or use real customer data. PostgreSQL, OpenAI integration, document ingestion, and production workflow features will be added in later milestones.
 
 ## Repository Structure
 
@@ -38,6 +40,10 @@ GitHub Actions runs lint, type checking, tests, and production builds for pushes
 
 - Web app: `http://localhost:5173`
 - API health: `http://localhost:3001/health`
+
+## Static Demonstration Workflow
+
+The frontend loads three fictional source records: a 2023 legacy CRM record, a 2025 annual review, and a 2026 adviser meeting note. Selecting **Prepare Client Review** reveals summary metrics, a current client picture, meaningful changes, adviser confirmation actions, evidence details for each fact, and a secondary execution trace.
 
 ## Later Milestones
 
