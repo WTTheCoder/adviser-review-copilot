@@ -103,7 +103,14 @@ export const reviewResponseSchema = z.object({
       status: workflowStepStatusSchema,
       detail: z.string().nullable()
     })
-  )
+  ),
+  executionMetadata: z
+    .object({
+      skillName: z.string(),
+      skillVersion: z.string().nullable(),
+      status: z.enum(["SUCCEEDED", "FAILED"])
+    })
+    .optional()
 });
 
 export type LifecycleStatus = z.infer<typeof lifecycleStatusSchema>;

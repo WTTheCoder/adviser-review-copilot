@@ -4,6 +4,7 @@ import {
   healthResponseSchema,
   type HealthResponse
 } from "@client-review-prep/shared";
+import { createApplicationRuntime } from "./composition/createApplicationRuntime.js";
 import { registerReviewRoutes } from "./routes/reviewRoutes.js";
 
 const DEFAULT_WEB_ORIGIN = "http://localhost:5173";
@@ -24,7 +25,8 @@ export const createServer = async () => {
     });
   });
 
-  await registerReviewRoutes(server);
+  const runtime = createApplicationRuntime();
+  await registerReviewRoutes(server, runtime.reviewRoutes);
 
   return server;
 };

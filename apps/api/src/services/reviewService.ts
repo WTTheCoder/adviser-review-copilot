@@ -3,7 +3,7 @@ import {
   LifecycleStatus,
   WorkflowRunStatus
 } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
 import type {
   AdviserDecisionPayload,
   ClientFactDto,
@@ -228,6 +228,51 @@ export const createReviewService = (client: PrismaClient) => {
     return buildReviewResponse(clientId);
   };
 
+  const createWorkflowRun = async (
+    clientId: string,
+    skillName: string,
+    skillVersion: string | null
+  ) => {
+    const versionSuffix = skillVersion ? `-v${skillVersion}` : "";
+    await client.client.update({
+      where: { id: clientId },
+      data: { reviewStatus: "Ready for adviser review" }
+    });
+
+    return client.workflowRun.create({
+      data: {
+        id: `workflow-${clientId}-${skillName}${versionSuffix}-${Date.now()}`,
+        clientId,
+        status: WorkflowRunStatus.PREPARED,
+        completedAt: new Date()
+      },
+      select: {
+        id: true
+      }
+    });
+  };
+
+  const recordWorkflowStep = async (input: {
+    workflowRunId: string;
+    sequence: number;
+    label: string;
+    status: WorkflowStepStatus;
+    detail?: string | null;
+  }) =>
+    client.workflowStep.create({
+      data: {
+        id: `${input.workflowRunId}-step-${input.sequence}`,
+        workflowRunId: input.workflowRunId,
+        sequence: input.sequence,
+        label: input.label,
+        status: input.status,
+        detail: input.detail ?? null
+      },
+      select: {
+        id: true
+      }
+    });
+
   const recordDecision = async (
     clientId: string,
     factId: string,
@@ -278,6 +323,8 @@ export const createReviewService = (client: PrismaClient) => {
   return {
     buildReviewResponse,
     prepareReview,
+    createWorkflowRun,
+    recordWorkflowStep,
     recordDecision,
     resetDemo
   };

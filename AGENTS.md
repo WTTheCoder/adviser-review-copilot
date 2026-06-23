@@ -6,3 +6,8 @@
 - Avoid unnecessary frameworks and repository tooling.
 - Never commit secrets or place secrets in tracked files.
 - Run lint, typecheck, tests, and build before finishing.
+- Keep API routes thin; route review preparation and adviser decisions through the controlled execution harness.
+- Preserve explicit skill and tool allowlists, Zod input/output validation, and safe error mapping.
+- Keep deterministic business/domain logic in services, skills, tools, or adapters rather than React components.
+- Do not give future model-provider code direct database access; it must operate through registered skills and tools.
+- Add focused security and regression tests when changing harness validation, tool permissions, or adviser-decision behavior.
