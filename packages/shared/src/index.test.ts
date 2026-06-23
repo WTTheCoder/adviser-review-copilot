@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   adviserDecisionPayloadSchema,
+  documentUploadRequestSchema,
+  documentUploadResultSchema,
+  documentUploadResponseSchema,
   healthResponseSchema,
+  maxUploadBytes,
   reviewResponseSchema
 } from "./index.js";
 
@@ -50,6 +54,98 @@ describe("reviewResponseSchema", () => {
         meaningfulChanges: [],
         adviserActions: [],
         workflowTrace: []
+      }).success
+    ).toBe(true);
+  });
+});
+
+describe("document upload schemas", () => {
+  it("accepts the text upload request and response contracts", () => {
+    const request = documentUploadRequestSchema.parse({
+      clientId: "demo-alex-taylor",
+      observedDate: "2026-06-04",
+      sourceType: "ADVISER_MEETING_NOTE",
+      originalFilename: "alex-note.md",
+      mediaType: "text/markdown",
+      sizeBytes: 42,
+      text: "Alex may have moved to Fremantle."
+    });
+    const result = documentUploadResultSchema.parse({
+      status: "stored",
+      sourceRecord: {
+        id: "source-upload-demo-alex-taylor-1",
+        clientId: request.clientId,
+        type: "ADVISER_MEETING_NOTE",
+        title: "Uploaded: alex-note.md",
+        observedDate: request.observedDate,
+        upload: {
+          origin: "UPLOAD",
+          safeFilename: "alex-note.md",
+          mediaType: request.mediaType,
+          characterCount: request.text.length,
+          byteCount: request.text.length,
+          uploadedAt: "2026-06-23T00:00:00.000Z"
+        }
+      },
+      safeFilename: "alex-note.md",
+      characterCount: request.text.length,
+      byteCount: request.text.length,
+      ingestionStatus: "validated"
+    });
+    const response = documentUploadResponseSchema.parse({
+      ...result,
+      executionMetadata: {
+        skillName: "ingest-client-document",
+        skillVersion: "1",
+        status: "SUCCEEDED",
+        events: [
+          {
+            sequence: 1,
+            label: "Skill selected: ingest-client-document",
+            status: "STARTED",
+            detail: null,
+            timestamp: "2026-06-23T00:00:00.000Z"
+          },
+          {
+            sequence: 2,
+            label: "Skill completed: ingest-client-document",
+            status: "COMPLETE",
+            detail: null,
+            timestamp: "2026-06-23T00:00:01.000Z"
+          }
+        ]
+      }
+    });
+
+    expect(response.sourceRecord.upload.safeFilename).toBe("alex-note.md");
+    expect(response.executionMetadata.events.at(-1)?.label).toBe(
+      "Skill completed: ingest-client-document"
+    );
+  });
+
+  it("rejects invalid dates and unexpected fields while treating sizeBytes as non-authoritative metadata", () => {
+    expect(
+      documentUploadRequestSchema.safeParse({
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-02-31",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "alex-note.txt",
+        mediaType: "text/plain",
+        sizeBytes: 12,
+        text: "Text",
+        unexpected: true
+      }).success
+    ).toBe(false);
+
+    expect(
+      documentUploadRequestSchema.safeParse({
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "alex-note.txt",
+        mediaType: "text/plain",
+        sizeBytes: maxUploadBytes + 1,
+        text: "Text"
       }).success
     ).toBe(true);
   });

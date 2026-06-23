@@ -6,11 +6,28 @@ export const createLegacyCrmAdapter = (client: PrismaClient) => ({
       where: { id: clientId }
     }),
 
-  getLegacySourceRecords: async (clientId: string) =>
-    client.sourceRecord.findMany({
+  getLegacySourceRecords: async (clientId: string) => {
+    const records = await client.sourceRecord.findMany({
       where: { clientId },
-      orderBy: { observedAt: "asc" }
-    }),
+      orderBy: [{ observedAt: "desc" }, { id: "asc" }]
+    });
+
+    return records.sort((first, second) => {
+      const observedDifference =
+        second.observedAt.getTime() - first.observedAt.getTime();
+      if (observedDifference !== 0) {
+        return observedDifference;
+      }
+
+      const firstUploaded = String(first.id).startsWith("source-upload-");
+      const secondUploaded = String(second.id).startsWith("source-upload-");
+      if (firstUploaded !== secondUploaded) {
+        return firstUploaded ? -1 : 1;
+      }
+
+      return first.id.localeCompare(second.id);
+    });
+  },
 
   getLegacyFacts: async (clientId: string) =>
     client.clientFact.findMany({

@@ -1,8 +1,12 @@
 import {
   adviserDecisionPayloadSchema,
+  documentUploadResultSchema,
+  documentUploadRequestSchema,
+  documentUploadResponseSchema,
   type ReviewResponse,
   reviewResponseSchema
 } from "@client-review-prep/shared";
+import type { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ExecutionResult } from "../agent/harness/executionResult.js";
 import { DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
@@ -13,15 +17,18 @@ export type ReviewRouteService = Pick<
   "buildReviewResponse" | "resetDemo"
 >;
 
-type ReviewRouteSkillName = "prepare-annual-review" | "apply-adviser-decision";
+type ReviewRouteSkillName =
+  | "prepare-annual-review"
+  | "apply-adviser-decision"
+  | "ingest-client-document";
 
 export type ReviewRouteHarness = {
-  execute: (
+  execute: <TOutputSchema extends z.ZodType>(
     skillName: ReviewRouteSkillName,
     input: unknown,
-    outputSchema: typeof reviewResponseSchema,
+    outputSchema: TOutputSchema,
     clientId: string
-  ) => Promise<ExecutionResult<ReviewResponse>>;
+  ) => Promise<ExecutionResult<z.infer<TOutputSchema>>>;
 };
 
 export type ReviewRouteDependencies = {
@@ -109,6 +116,43 @@ export const registerReviewRoutes = async (
       }
 
       return withExecutionMetadata(result);
+    }
+  );
+
+  server.post(
+    "/api/clients/:clientId/source-records/upload",
+    async (request, reply) => {
+      const { clientId } = request.params as { clientId: string };
+      const payloadResult = documentUploadRequestSchema.safeParse({
+        ...(typeof request.body === "object" && request.body !== null
+          ? request.body
+          : {}),
+        clientId,
+        sourceType: "ADVISER_MEETING_NOTE"
+      });
+
+      if (!payloadResult.success) {
+        return reply.status(400).send({ message: "Invalid upload request." });
+      }
+
+      const result = await harness.execute(
+        "ingest-client-document",
+        payloadResult.data,
+        documentUploadResultSchema,
+        clientId
+      );
+
+      if (!result.ok) {
+        request.log.warn({ code: result.error.code }, "Document ingestion failed");
+        return reply.status(400).send({
+          message: "The document could not be uploaded. Check the file type, size, date, and content."
+        });
+      }
+
+      return documentUploadResponseSchema.parse({
+        ...result.output,
+        executionMetadata: result.metadata
+      });
     }
   );
 

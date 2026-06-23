@@ -5,11 +5,13 @@ import {
   WorkflowRunStatus
 } from "@prisma/client";
 import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
-import type {
-  AdviserDecisionPayload,
-  ClientFactDto,
-  ReviewResponse,
-  SourceRecordDto
+import {
+  uploadSourceMetadataSchema,
+  type AdviserDecisionPayload,
+  type ClientFactDto,
+  type DocumentUploadResult,
+  type ReviewResponse,
+  type SourceRecordDto
 } from "@client-review-prep/shared";
 import { createLegacyCrmAdapter } from "../legacy/legacyCrmAdapter.js";
 import { DEMO_CLIENT_ID, seedDemoData, workflowSteps } from "../demo/seedDemoData.js";
@@ -74,10 +76,40 @@ const currentLabelForField = (field: string) => {
   return "Current";
 };
 
-const contentToLines = (content: unknown): string[] =>
-  Array.isArray(content) && content.every((line) => typeof line === "string")
-    ? content
-    : [];
+const uploadContentSchema = {
+  is: (content: unknown): content is {
+    lines: string[];
+    upload: NonNullable<SourceRecordDto["upload"]>;
+  } =>
+    typeof content === "object" &&
+    content !== null &&
+    Array.isArray((content as { lines?: unknown }).lines) &&
+    (content as { lines: unknown[] }).lines.every(
+      (line) => typeof line === "string"
+    ) &&
+    typeof (content as { upload?: unknown }).upload === "object" &&
+    (content as { upload?: unknown }).upload !== null
+};
+
+const contentToLines = (content: unknown): string[] => {
+  if (Array.isArray(content) && content.every((line) => typeof line === "string")) {
+    return content;
+  }
+
+  if (uploadContentSchema.is(content)) {
+    return content.lines;
+  }
+
+  return [];
+};
+
+const contentToUpload = (content: unknown): SourceRecordDto["upload"] => {
+  if (uploadContentSchema.is(content)) {
+    return content.upload;
+  }
+
+  return null;
+};
 
 const toUtcDate = (calendarDate: string) =>
   new Date(`${calendarDate}T00:00:00.000Z`);
@@ -194,7 +226,8 @@ export const createReviewService = (client: PrismaClient) => {
       observedDate: formatDate(record.observedAt),
       summary: record.summary,
       content: contentToLines(record.content),
-      lifecycleStatus: record.lifecycleStatus
+      lifecycleStatus: record.lifecycleStatus,
+      upload: contentToUpload(record.content)
     }));
 
     const factDtos: ClientFactDto[] = facts.map(mapFactToDto);
@@ -374,6 +407,70 @@ export const createReviewService = (client: PrismaClient) => {
     return buildReviewResponse(clientId);
   };
 
+  const createUploadedSourceRecord = async (input: {
+    clientId: string;
+    observedDate: string;
+    sourceType: "ADVISER_MEETING_NOTE";
+    safeFilename: string;
+    mediaType: string;
+    text: string;
+    characterCount: number;
+    byteCount: number;
+  }): Promise<DocumentUploadResult> => {
+    const clientRecord = await client.client.findUnique({
+      where: { id: input.clientId },
+      select: { id: true }
+    });
+
+    if (!clientRecord) {
+      throw new Error("CLIENT_NOT_FOUND");
+    }
+
+    const uploadedAt = new Date();
+    const sourceRecordId = `source-upload-${input.clientId}-${uploadedAt.getTime()}`;
+    const upload = uploadSourceMetadataSchema.parse({
+      origin: "UPLOAD" as const,
+      safeFilename: input.safeFilename,
+      mediaType: input.mediaType,
+      characterCount: input.characterCount,
+      byteCount: input.byteCount,
+      uploadedAt: uploadedAt.toISOString()
+    });
+    const lines = input.text.split("\n");
+
+    await client.sourceRecord.create({
+      data: {
+        id: sourceRecordId,
+        clientId: input.clientId,
+        type: SourceRecordType.ADVISER_MEETING_NOTE,
+        title: `Uploaded: ${input.safeFilename}`,
+        observedAt: toUtcDate(input.observedDate),
+        summary: `Uploaded text document (${input.characterCount} characters).`,
+        content: {
+          lines,
+          upload
+        },
+        lifecycleStatus: LifecycleStatus.CURRENT
+      }
+    });
+
+    return {
+      status: "stored",
+      sourceRecord: {
+        id: sourceRecordId,
+        clientId: input.clientId,
+        type: input.sourceType,
+        title: `Uploaded: ${input.safeFilename}`,
+        observedDate: input.observedDate,
+        upload
+      },
+      safeFilename: input.safeFilename,
+      characterCount: input.characterCount,
+      byteCount: input.byteCount,
+      ingestionStatus: "validated"
+    };
+  };
+
   const applyExtractedCandidateProjection = async (
     clientId: string,
     candidates: readonly ExtractedCandidateProjection[]
@@ -472,6 +569,7 @@ export const createReviewService = (client: PrismaClient) => {
     createWorkflowRun,
     recordWorkflowStep,
     applyExtractedCandidateProjection,
+    createUploadedSourceRecord,
     recordDecision,
     resetDemo
   };

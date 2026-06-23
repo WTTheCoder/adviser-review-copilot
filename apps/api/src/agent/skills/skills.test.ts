@@ -4,9 +4,13 @@ import type { ReviewResponse } from "@client-review-prep/shared";
 import { ExecutionHarness } from "../harness/executionHarness.js";
 import { SkillRegistry } from "../registry/skillRegistry.js";
 import { applyAdviserDecisionSkill } from "./applyAdviserDecisionSkill.js";
+import { ingestClientDocumentSkill } from "./ingestClientDocumentSkill.js";
 import { loadClientContextSkill } from "./loadClientContextSkill.js";
 import { prepareAnnualReviewSkill } from "./prepareAnnualReviewSkill.js";
-import { reviewResponseSchema } from "@client-review-prep/shared";
+import {
+  documentUploadResultSchema,
+  reviewResponseSchema
+} from "@client-review-prep/shared";
 import { ToolRegistry } from "../tools/toolRegistry.js";
 import { createAiExtractionTools } from "../tools/aiExtractionTools.js";
 import {
@@ -17,6 +21,7 @@ import {
   createReviewTools,
   type ReviewToolService
 } from "../tools/reviewTools.js";
+import { createDocumentTools } from "../tools/documentTools.js";
 import { MockCandidateFactExtractor } from "../../ai/providers/mockCandidateFactExtractor.js";
 import type {
   CandidateFact,
@@ -165,6 +170,7 @@ const createHarness = (
   skillRegistry.register(loadClientContextSkill);
   skillRegistry.register(prepareAnnualReviewSkill);
   skillRegistry.register(applyAdviserDecisionSkill);
+  skillRegistry.register(ingestClientDocumentSkill);
 
   const legacyAdapter = {
     getLegacyClientRecord: async () => ({
@@ -234,6 +240,28 @@ const createHarness = (
         risk.status = extractedRisk ? "Requires adviser approval" : "Current";
       }
     },
+    createUploadedSourceRecord: async (input) => ({
+      status: "stored",
+      sourceRecord: {
+        id: "source-upload-test",
+        clientId: input.clientId,
+        type: "ADVISER_MEETING_NOTE",
+        title: `Uploaded: ${input.safeFilename}`,
+        observedDate: input.observedDate,
+        upload: {
+          origin: "UPLOAD",
+          safeFilename: input.safeFilename,
+          mediaType: "text/plain",
+          characterCount: input.characterCount,
+          byteCount: input.byteCount,
+          uploadedAt: "2026-06-04T00:00:00.000Z"
+        }
+      },
+      safeFilename: input.safeFilename,
+      characterCount: input.characterCount,
+      byteCount: input.byteCount,
+      ingestionStatus: "validated"
+    }),
     buildReviewResponse: async () => ({
       ...review,
       summaryMetrics: buildSummaryMetrics(review),
@@ -283,6 +311,7 @@ const createHarness = (
   } satisfies ReviewToolService;
 
   for (const tool of [
+    ...createDocumentTools(),
     ...createAiExtractionTools(extractor),
     ...createLegacyCrmTools(legacyAdapter),
     ...createReviewTools(reviewService)
@@ -345,6 +374,141 @@ describe("required skills", () => {
         })
       ])
     );
+  });
+
+  it("ingest-client-document validates and stores one text upload without leaking document text in the trace", async () => {
+    const { harness } = createHarness();
+    const uploadedText =
+      "Alex may have moved to Fremantle, but the address has not been confirmed.";
+    const result = await harness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "client-note.txt",
+        mediaType: "text/plain",
+        sizeBytes: uploadedText.length,
+        text: uploadedText
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.output.safeFilename : null).toBe("client-note.txt");
+    expect(result.ok ? result.output.ingestionStatus : null).toBe("validated");
+    expect(result.ok ? result.output.sourceRecord.upload.origin : null).toBe(
+      "UPLOAD"
+    );
+    expect(result.metadata.events.map((event) => event.label)).toEqual([
+      "Skill selected: ingest-client-document",
+      "Skill input validated",
+      "Upload metadata validated",
+      "Tool invoked: document.validateTextUpload",
+      "Text upload validated",
+      "Filename sanitized",
+      "File size validated",
+      "UTF-8 text decoded",
+      "Document content validated",
+      "Tool invoked: review.createUploadedSourceRecord",
+      "Source record persisted",
+      "Skill output validated",
+      "Skill completed: ingest-client-document"
+    ]);
+    expect(JSON.stringify(result.metadata.events)).not.toContain(uploadedText);
+    expect(JSON.stringify(result.metadata.events)).not.toContain("C:\\Users");
+  });
+
+  it("ingest-client-document rejects invalid upload input before tool execution", async () => {
+    const { harness } = createHarness();
+    const result = await harness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-02-31",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "client-note.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 12,
+        text: "not accepted"
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("INVALID_SKILL_INPUT");
+    expect(result.metadata.events.map((event) => event.label)).not.toContain(
+      "Tool invoked: document.validateTextUpload"
+    );
+  });
+
+  it("ingest-client-document rejects invalid upload tool output", async () => {
+    const { review } = createHarness();
+    const toolRegistry = new ToolRegistry();
+    const skillRegistry = new SkillRegistry();
+    skillRegistry.register(ingestClientDocumentSkill);
+    for (const tool of createDocumentTools()) {
+      toolRegistry.register(tool);
+    }
+    const invalidUploadResponse = {
+      status: "stored",
+      sourceRecord: {
+        id: "source-upload-test",
+        clientId: "demo-alex-taylor",
+        type: "ADVISER_MEETING_NOTE",
+        title: "Uploaded: note.txt",
+        observedDate: "2026-06-04",
+        upload: {
+          origin: "UPLOAD",
+          safeFilename: "note.txt",
+              mediaType: "application/pdf",
+              characterCount: 10,
+              byteCount: 10,
+              uploadedAt: "2026-06-04T00:00:00.000Z"
+            }
+          },
+          safeFilename: "note.txt",
+          characterCount: 10,
+          byteCount: 10,
+          ingestionStatus: "validated"
+        } as unknown as Awaited<
+      ReturnType<ReviewToolService["createUploadedSourceRecord"]>
+    >;
+    const invalidToolOutputService = {
+      createWorkflowRun: async () => ({ id: "workflow-1" }),
+      recordWorkflowStep: async () => ({ id: "step-1" }),
+      applyExtractedCandidateProjection: async () => undefined,
+      createUploadedSourceRecord: async () => invalidUploadResponse,
+      buildReviewResponse: async () => review,
+      recordDecision: async () => {
+        throw new Error("Not used");
+      }
+    } satisfies ReviewToolService;
+
+    for (const tool of createReviewTools(invalidToolOutputService)) {
+      toolRegistry.register(tool);
+    }
+
+    const invalidOutputHarness = new ExecutionHarness(skillRegistry, toolRegistry);
+    const result = await invalidOutputHarness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "note.txt",
+        mediaType: "text/plain",
+        sizeBytes: 10,
+        text: "Valid text"
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("INVALID_TOOL_OUTPUT");
   });
 
   it("maps different extracted candidates into the adviser-facing review", async () => {

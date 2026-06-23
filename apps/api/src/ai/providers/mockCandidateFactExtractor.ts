@@ -17,12 +17,13 @@ export class MockCandidateFactExtractor implements CandidateFactExtractor {
     const lowerText = input.meetingNoteText.toLowerCase();
     const candidateFacts = [];
 
-    if (lowerText.includes("subiaco")) {
+    if (lowerText.includes("subiaco") || lowerText.includes("fremantle")) {
+      const address = lowerText.includes("fremantle") ? "Fremantle" : "Subiaco";
       candidateFacts.push({
         field: "ADDRESS",
-        proposedValue: "Subiaco",
+        proposedValue: address,
         confidence: "MEDIUM",
-        evidence: "may have moved to Subiaco",
+        evidence: `may have moved to ${address}`,
         sourceRecordId: input.sourceRecordId,
         observedDate: input.observedDate,
         requiresHumanReview: true,
@@ -32,13 +33,19 @@ export class MockCandidateFactExtractor implements CandidateFactExtractor {
 
     if (
       lowerText.includes("growth-oriented") ||
-      lowerText.includes("growth oriented")
+      lowerText.includes("growth oriented") ||
+      lowerText.includes("more conservative")
     ) {
+      const riskProfile = lowerText.includes("more conservative")
+        ? "Conservative"
+        : "Growth-oriented";
       candidateFacts.push({
         field: "RISK_PROFILE",
-        proposedValue: "Growth-oriented",
+        proposedValue: riskProfile,
         confidence: "MEDIUM",
-        evidence: "considering a more growth-oriented investment approach",
+        evidence: lowerText.includes("more conservative")
+          ? "considering a more conservative investment approach"
+          : "considering a more growth-oriented investment approach",
         sourceRecordId: input.sourceRecordId,
         observedDate: input.observedDate,
         requiresHumanReview: true,

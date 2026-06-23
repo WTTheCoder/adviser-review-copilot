@@ -15,7 +15,7 @@ The provider does not receive Prisma, Fastify, React, `ToolRegistry`, or `SkillR
 
 ## Data Sent In Live Mode
 
-Only the minimum meeting-note context is sent: safe client display name, source record ID and type, observed date, meeting-note text, and supported candidate fields.
+Only the minimum meeting-note context is sent: safe client display name, source record ID and type, observed date, meeting-note text, and supported candidate fields. Uploaded text records use the same boundary after validation and persistence; the provider does not receive browser paths, local server paths, upload internals, database rows, adviser decisions, workflow traces, or unrelated records.
 
 The implementation does not send API keys, audit history, complete database rows, adviser decisions, workflow traces, unrelated records, or environment configuration.
 
@@ -27,7 +27,7 @@ Unsupported fields, excessive candidates, malformed dates, extra properties, and
 
 ## Prompt Injection Treatment
 
-Meeting-note text is untrusted. The prompt explicitly states that source text is data, not instructions, and wraps it in `<meeting_note>` delimiters. A note cannot choose skills, select tools, access secrets, approve facts, change schemas, or update the database.
+Meeting-note text, including uploaded `.txt` and `.md` content, is untrusted. The prompt explicitly states that source text is data, not instructions, and wraps it in `<meeting_note>` delimiters. A note cannot choose skills, select tools, access secrets, approve facts, change schemas, read files, or update the database.
 
 ## Mock And Live Modes
 
@@ -74,4 +74,4 @@ Phase 5 reuses workflow trace entries and backwards-compatible response metadata
 
 ## Known Limitations
 
-This is not production-ready and does not claim regulatory compliance. Phase 6 should review live-model evaluation, richer diagnostics, retention policy, stricter provider observability, and deterministic numeric normalization before expanding extraction beyond the fictional demo.
+This is not production-ready and does not claim regulatory compliance. Phase 6B should review PDF/DOCX parsing, OCR, malware scanning, retention policy, production document storage, authentication, live-model evaluation, richer diagnostics, stricter provider observability, and deterministic numeric normalization before expanding extraction beyond the fictional demo.

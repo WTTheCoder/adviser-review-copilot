@@ -41,6 +41,15 @@ The React app consumes normal API responses and optional execution metadata. It 
 2. Apply the decision through backend domain logic.
 3. Return the updated review response with execution metadata.
 
+`POST /api/clients/:clientId/source-records/upload` runs `ingest-client-document`:
+
+1. Validate the fixed route payload against the shared upload schema.
+2. Validate filename, extension, media type, size, date, UTF-8 text, and non-empty content through `document.validateTextUpload`.
+3. Persist one uploaded adviser meeting-note source record through `review.createUploadedSourceRecord`.
+4. Return restrained upload metadata without echoing full document text in the execution trace.
+
+The upload route does not expose arbitrary skill names, arbitrary tool names, server filesystem reads, or model-controlled file access.
+
 ## Skill and Tool Boundaries
 
 Every skill declares:
@@ -58,6 +67,8 @@ Every tool declares:
 - Narrow execute function.
 
 The harness rejects unknown skills, invalid skill inputs, invalid skill outputs, invalid tool inputs, invalid tool outputs, unknown tools, and tools outside the current skill allowlist.
+
+Phase 6A document ingestion adds only a fixed text-upload path. Uploaded content is untrusted data and is stored as validated text on an existing `SourceRecord` for the local prototype. The browser-supplied filename is display metadata only; it is never used as a filesystem path.
 
 ## Legacy Adapter Rationale
 

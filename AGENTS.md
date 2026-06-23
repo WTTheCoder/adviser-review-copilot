@@ -17,3 +17,6 @@
 - Keep deterministic application rules authoritative over model claims.
 - Do not log secrets, raw provider payloads, raw prompts, or full untrusted source text by default.
 - Keep tests network-free by default and preserve functional mock mode.
+- Route text-document ingestion through the fixed upload API, `ingest-client-document` skill, and allowlisted document/review tools.
+- Treat uploaded document content and filenames as untrusted data; never use client-supplied filenames as filesystem paths or render uploaded Markdown as HTML.
+- Preserve the Phase 6A upload scope unless explicitly changed: one UTF-8 `.txt` or `.md` file, bounded size, PostgreSQL text storage for the local demo only.

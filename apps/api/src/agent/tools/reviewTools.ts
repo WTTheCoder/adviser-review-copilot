@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   adviserDecisionPayloadSchema,
+  documentUploadResultSchema,
   reviewResponseSchema
 } from "@client-review-prep/shared";
 import { calendarDateSchema } from "../../ai/contracts/calendarDateSchema.js";
@@ -12,6 +13,7 @@ export type ReviewToolService = Pick<
   | "createWorkflowRun"
   | "recordWorkflowStep"
   | "applyExtractedCandidateProjection"
+  | "createUploadedSourceRecord"
   | "buildReviewResponse"
   | "recordDecision"
 >;
@@ -75,6 +77,19 @@ const applyDecisionInputSchema = z.object({
   factId: z.string().min(1),
   payload: adviserDecisionPayloadSchema
 });
+
+const createUploadedSourceRecordInputSchema = z
+  .object({
+    clientId: z.string().min(1).max(80),
+    observedDate: calendarDateSchema,
+    sourceType: z.literal("ADVISER_MEETING_NOTE"),
+    safeFilename: z.string().min(1).max(120),
+    mediaType: z.string().min(1).max(120),
+    text: z.string().min(1),
+    characterCount: z.number().int().positive(),
+    byteCount: z.number().int().positive()
+  })
+  .strict();
 
 export const createReviewTools = (
   reviewService: ReviewToolService
@@ -162,10 +177,23 @@ export const createReviewTools = (
       reviewService.recordDecision(clientId, factId, payload)
   };
 
+  const createUploadedSourceRecord: ToolDefinition<
+    typeof createUploadedSourceRecordInputSchema,
+    typeof documentUploadResultSchema
+  > = {
+    name: "review.createUploadedSourceRecord",
+    description: "Persist a validated text upload as a source record.",
+    inputSchema: createUploadedSourceRecordInputSchema,
+    outputSchema: documentUploadResultSchema,
+    risk: "MEDIUM",
+    execute: async (input) => reviewService.createUploadedSourceRecord(input)
+  };
+
   return [
     createWorkflowRun,
     recordWorkflowStep,
     applyExtractedCandidateProjection,
+    createUploadedSourceRecord,
     getPreparedReview,
     applyDecision
   ] as const;

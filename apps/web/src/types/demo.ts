@@ -2,6 +2,7 @@ import type {
   AdviserActionDto,
   ClientFactDto,
   DecisionType,
+  ExecutionTraceMetadata,
   ReviewResponse,
   SourceRecordDto
 } from "@client-review-prep/shared";
@@ -11,6 +12,7 @@ export type ClientFact = ClientFactDto;
 export type AdviserAction = AdviserActionDto;
 export type ClientReviewData = ReviewResponse;
 export type ActionDecision = DecisionType;
+export type UploadExecutionMetadata = ExecutionTraceMetadata;
 
 export type SummaryMetric = {
   label: string;
