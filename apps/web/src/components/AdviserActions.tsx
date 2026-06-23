@@ -1,8 +1,10 @@
 import { StatusBadge } from "./StatusBadge.js";
-import type { ActionDecision, AdviserAction } from "../types/demo.js";
+import type { ActionDecision, AdviserAction, ClientFact } from "../types/demo.js";
+import { getAdviserActionPresentation } from "../domain/factPresentation.js";
 
 type AdviserActionsProps = {
   items: AdviserAction[];
+  facts: ClientFact[];
   savingFactId: string | null;
   onDecision: (factId: string, decision: ActionDecision) => void;
 };
@@ -40,6 +42,7 @@ export const getDecisionButtonClass = (
 };
 
 export const AdviserActions = ({
+  facts,
   items,
   savingFactId,
   onDecision
@@ -49,16 +52,18 @@ export const AdviserActions = ({
     <div className="mt-4 space-y-4">
       {items.map((item) => {
         const isSaving = savingFactId === item.factId;
+        const fact = facts.find((candidate) => candidate.id === item.factId) ?? null;
+        const presentation = getAdviserActionPresentation(item, fact);
 
         return (
           <article className="rounded border border-slate-200 p-4" key={item.id}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-slate-950">
-                  {item.title}
+                  {presentation.title}
                 </h3>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {item.detail}
+                  {presentation.detail}
                 </p>
               </div>
               <StatusBadge status={item.status} />

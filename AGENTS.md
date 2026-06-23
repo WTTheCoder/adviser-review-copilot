@@ -11,3 +11,9 @@
 - Keep deterministic business/domain logic in services, skills, tools, or adapters rather than React components.
 - Do not give future model-provider code direct database access; it must operate through registered skills and tools.
 - Add focused security and regression tests when changing harness validation, tool permissions, or adviser-decision behavior.
+- Never create a model-to-database direct path.
+- Do not add arbitrary public prompts or public arbitrary skill/tool names.
+- Validate all model outputs at runtime before use.
+- Keep deterministic application rules authoritative over model claims.
+- Do not log secrets, raw provider payloads, raw prompts, or full untrusted source text by default.
+- Keep tests network-free by default and preserve functional mock mode.

@@ -1,6 +1,7 @@
 import {
   DecisionType,
   LifecycleStatus,
+  SourceRecordType,
   WorkflowRunStatus
 } from "@prisma/client";
 import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
@@ -17,12 +18,28 @@ import {
   isDecisionAllowedForFact
 } from "./decisionRules.js";
 
+export type ExtractedCandidateProjection = {
+  field: "ADDRESS" | "RISK_PROFILE" | "FINANCIAL_GOAL" | "EMPLOYMENT" | "ANNUAL_INCOME" | "SUPERANNUATION";
+  proposedValue: string;
+  applicationStatus:
+    | "NEEDS_CONFIRMATION"
+    | "REQUIRES_ADVISER_APPROVAL"
+    | "CANDIDATE_REVIEW";
+  sourceRecordId: string;
+  observedDate: string;
+};
+
 const meaningfulChanges = [
   "Employer changed from ABC Mining to New Energy Ltd",
   "Annual income increased from AUD 110,000 to AUD 135,000",
   "Superannuation increased from AUD 125,000 to AUD 174,000",
   "Home-buying timeframe changed from five years to two years"
 ];
+
+const unresolvedReviewStatuses = new Set<LifecycleStatus>([
+  LifecycleStatus.NEEDS_CONFIRMATION,
+  LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+]);
 
 const formatDate = (date: Date) =>
   new Intl.DateTimeFormat("en-AU", {
@@ -61,6 +78,29 @@ const contentToLines = (content: unknown): string[] =>
   Array.isArray(content) && content.every((line) => typeof line === "string")
     ? content
     : [];
+
+const toUtcDate = (calendarDate: string) =>
+  new Date(`${calendarDate}T00:00:00.000Z`);
+
+const fieldProjectionTargets = {
+  ADDRESS: {
+    factId: "fact-address",
+    status: LifecycleStatus.NEEDS_CONFIRMATION,
+    confidence: "Medium",
+    explanation: (candidate: string) =>
+      `The ${candidate} address remains a candidate fact from the latest extraction because it was not verified. The official address stays unchanged until an adviser confirms the change.`
+  },
+  RISK_PROFILE: {
+    factId: "fact-risk-profile",
+    status: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
+    confidence: "Medium",
+    explanation: (candidate: string) =>
+      `The ${candidate} risk-profile candidate came from the latest extraction and requires adviser approval before use. The official risk profile stays unchanged until reviewed.`
+  }
+} as const;
+
+const clearCandidateExplanation = (field: string) =>
+  `No ${field.toLowerCase()} candidate was extracted in the latest preparation run. The official value remains unchanged.`;
 
 type LegacyAdapter = ReturnType<typeof createLegacyCrmAdapter>;
 
@@ -101,6 +141,28 @@ export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
   memoryExplanation: fact.explanation
 });
 
+export const buildMeaningfulChanges = (facts: readonly FactForReview[]) => [
+  ...meaningfulChanges,
+  ...facts
+    .filter((fact) => fact.candidateValue !== null)
+    .map(
+      (fact) =>
+        `${fact.field} candidate: ${fact.officialValue} to ${fact.candidateValue}`
+    )
+];
+
+export const countUnresolvedReviewItems = (facts: readonly FactForReview[]) =>
+  facts.filter((fact) => unresolvedReviewStatuses.has(fact.lifecycleStatus)).length;
+
+export const buildSummaryMetrics = (
+  facts: readonly FactForReview[],
+  changes: readonly string[]
+) => [
+  { value: String(facts.length + 6), label: "Facts reviewed" },
+  { value: String(changes.length), label: "Meaningful changes" },
+  { value: String(countUnresolvedReviewItems(facts)), label: "Items needing confirmation" }
+];
+
 export const createReviewService = (client: PrismaClient) => {
   const legacyAdapter = createLegacyCrmAdapter(client);
 
@@ -136,6 +198,7 @@ export const createReviewService = (client: PrismaClient) => {
     }));
 
     const factDtos: ClientFactDto[] = facts.map(mapFactToDto);
+    const meaningfulChangeItems = buildMeaningfulChanges(facts);
 
     const actionFacts = facts.filter((fact) =>
       ["fact-address", "fact-risk-profile"].includes(fact.id)
@@ -149,14 +212,10 @@ export const createReviewService = (client: PrismaClient) => {
         reviewYear: legacyClient.reviewYear,
         reviewStatus: legacyClient.reviewStatus
       },
-      summaryMetrics: [
-        { value: "12", label: "Facts reviewed" },
-        { value: "4", label: "Meaningful changes" },
-        { value: "2", label: "Items needing confirmation" }
-      ],
+      summaryMetrics: buildSummaryMetrics(facts, meaningfulChangeItems),
       sourceRecords: sourceRecordDtos,
       clientFacts: factDtos,
-      meaningfulChanges,
+      meaningfulChanges: meaningfulChangeItems,
       adviserActions: actionFacts.map((fact) => {
         const latestDecision = fact.adviserDecisions[0] ?? null;
         const isAddress = fact.id === "fact-address";
@@ -315,6 +374,93 @@ export const createReviewService = (client: PrismaClient) => {
     return buildReviewResponse(clientId);
   };
 
+  const applyExtractedCandidateProjection = async (
+    clientId: string,
+    candidates: readonly ExtractedCandidateProjection[]
+  ) => {
+    const supportedCandidates = candidates.filter(
+      (candidate) =>
+        candidate.field === "ADDRESS" || candidate.field === "RISK_PROFILE"
+    );
+    const candidatesByField = new Map(
+      supportedCandidates.map((candidate) => [candidate.field, candidate])
+    );
+
+    await client.$transaction(async (transaction) => {
+      const sourceRecord = await transaction.sourceRecord.findFirst({
+        where: {
+          clientId,
+          type: SourceRecordType.ADVISER_MEETING_NOTE
+        },
+        orderBy: { observedAt: "desc" }
+      });
+      const facts = await transaction.clientFact.findMany({
+        where: {
+          clientId,
+          id: {
+            in: Object.values(fieldProjectionTargets).map(
+              (target) => target.factId
+            )
+          }
+        },
+        include: {
+          adviserDecisions: {
+            orderBy: { createdAt: "desc" },
+            take: 1
+          }
+        }
+      });
+
+      for (const fact of facts) {
+        const field =
+          fact.id === fieldProjectionTargets.ADDRESS.factId
+            ? "ADDRESS"
+            : "RISK_PROFILE";
+        const target = fieldProjectionTargets[field];
+        const candidate = candidatesByField.get(field);
+        const latestDecision = fact.adviserDecisions[0] ?? null;
+        const candidateObservedAt = candidate
+          ? toUtcDate(candidate.observedDate)
+          : null;
+        const decisionIsNewerThanEvidence =
+          latestDecision && candidateObservedAt
+            ? latestDecision.createdAt >= candidateObservedAt
+            : false;
+
+        if (decisionIsNewerThanEvidence) {
+          continue;
+        }
+
+        if (candidate) {
+          await transaction.clientFact.update({
+            where: { id: fact.id },
+            data: {
+              candidateValue: candidate.proposedValue,
+              lifecycleStatus: target.status,
+              confidence: target.confidence,
+              sourceRecordId: candidate.sourceRecordId,
+              observedAt: candidateObservedAt ?? fact.observedAt,
+              explanation: target.explanation(candidate.proposedValue)
+            }
+          });
+          continue;
+        }
+
+        await transaction.clientFact.update({
+          where: { id: fact.id },
+          data: {
+            candidateValue: null,
+            lifecycleStatus: LifecycleStatus.CURRENT,
+            confidence: "Low",
+            sourceRecordId: sourceRecord?.id ?? fact.sourceRecordId,
+            observedAt: sourceRecord?.observedAt ?? fact.observedAt,
+            explanation: clearCandidateExplanation(fact.field)
+          }
+        });
+      }
+    });
+  };
+
   const resetDemo = async () => {
     await seedDemoData(client);
     return buildReviewResponse(DEMO_CLIENT_ID);
@@ -325,6 +471,7 @@ export const createReviewService = (client: PrismaClient) => {
     prepareReview,
     createWorkflowRun,
     recordWorkflowStep,
+    applyExtractedCandidateProjection,
     recordDecision,
     resetDemo
   };
