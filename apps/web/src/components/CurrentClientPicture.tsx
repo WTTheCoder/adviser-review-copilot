@@ -6,6 +6,14 @@ type CurrentClientPictureProps = {
   onSelectFact: (fact: ClientFact) => void;
 };
 
+export const getFactDisplayModel = (fact: ClientFact) => ({
+  label: fact.currentLabel,
+  value: fact.currentValue,
+  previousValue: fact.previousValue,
+  candidateValue: fact.candidateValue,
+  status: fact.status
+});
+
 export const CurrentClientPicture = ({
   facts,
   onSelectFact
@@ -21,38 +29,46 @@ export const CurrentClientPicture = ({
     </div>
     <div className="grid gap-px bg-slate-200 md:grid-cols-2 xl:grid-cols-3">
       {facts.map((fact) => (
-        <button
-          className="flex min-h-48 flex-col bg-white p-5 text-left transition hover:bg-cyan-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-700"
-          key={fact.id}
-          type="button"
-          onClick={() => onSelectFact(fact)}
-        >
-          <span className="text-sm font-semibold text-slate-900">{fact.field}</span>
-          <span className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
-            {fact.currentLabel}
-          </span>
-          <span className="mt-1 text-xl font-semibold text-slate-950">
-            {fact.currentValue}
-          </span>
-          {fact.candidateValue ? (
-            <>
+        (() => {
+          const display = getFactDisplayModel(fact);
+
+          return (
+            <button
+              className="flex min-h-48 flex-col bg-white p-5 text-left transition hover:bg-cyan-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-700"
+              key={fact.id}
+              type="button"
+              onClick={() => onSelectFact(fact)}
+            >
+              <span className="text-sm font-semibold text-slate-900">
+                {fact.field}
+              </span>
               <span className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Candidate value
+                {display.label}
               </span>
-              <span className="mt-1 text-base font-semibold text-slate-800">
-                {fact.candidateValue}
+              <span className="mt-1 text-xl font-semibold text-slate-950">
+                {display.value}
               </span>
-            </>
-          ) : null}
-          {fact.previousValue ? (
-            <span className="mt-4 text-sm text-slate-600">
-              Previous: {fact.previousValue}
-            </span>
-          ) : null}
-          <span className="mt-auto pt-4">
-            <StatusBadge status={fact.status} />
-          </span>
-        </button>
+              {display.candidateValue ? (
+                <>
+                  <span className="mt-4 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Candidate value
+                  </span>
+                  <span className="mt-1 text-base font-semibold text-slate-800">
+                    {display.candidateValue}
+                  </span>
+                </>
+              ) : null}
+              {display.previousValue ? (
+                <span className="mt-4 text-sm text-slate-600">
+                  Previous: {display.previousValue}
+                </span>
+              ) : null}
+              <span className="mt-auto pt-4">
+                <StatusBadge status={display.status} />
+              </span>
+            </button>
+          );
+        })()
       ))}
     </div>
   </section>

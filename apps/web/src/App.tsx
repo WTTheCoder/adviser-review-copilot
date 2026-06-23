@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  adviserDecisionPayloadSchema,
   healthResponseSchema,
-  type HealthResponse
+  reviewResponseSchema,
+  type DecisionType,
+  type HealthResponse,
+  type ReviewResponse
 } from "@client-review-prep/shared";
 import { AdviserActions } from "./components/AdviserActions.js";
 import { ApiStatusBadge, type ApiStatus } from "./components/ApiStatusBadge.js";
@@ -12,24 +16,22 @@ import { MeaningfulChanges } from "./components/MeaningfulChanges.js";
 import { SourceRecordPanel } from "./components/SourceRecordPanel.js";
 import { SummaryMetrics } from "./components/SummaryMetrics.js";
 import {
-  demoClientReview,
-  executionTrace,
-  sourceRecords
-} from "./data/demoReview.js";
-import {
-  createInitialReviewWorkflow,
   getPrepareButtonLabel,
   getReviewStatusLabel,
-  markReviewPrepared,
-  startReviewPreparation,
-  updateActionDecision
+  type ReviewPhase
 } from "./domain/reviewWorkflow.js";
 import type { ClientFact } from "./types/demo.js";
 
+const DEMO_CLIENT_ID = "demo-alex-taylor";
+
 export const App = () => {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
-  const [workflow, setWorkflow] = useState(createInitialReviewWorkflow);
+  const [reviewData, setReviewData] = useState<ReviewResponse | null>(null);
+  const [reviewPhase, setReviewPhase] = useState<ReviewPhase>("ready");
   const [selectedFact, setSelectedFact] = useState<ClientFact | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [savingFactId, setSavingFactId] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
   const apiBaseUrl = useMemo(
     () => import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001",
     []
@@ -70,27 +72,133 @@ export const App = () => {
     };
   }, [apiBaseUrl]);
 
-  const handlePrepareReview = () => {
-    setWorkflow(startReviewPreparation);
+  useEffect(() => {
+    const controller = new AbortController();
 
-    window.setTimeout(() => {
-      setWorkflow(markReviewPrepared);
-    }, 550);
+    const loadReview = async () => {
+      setLoadError(null);
+
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/review`,
+          { signal: controller.signal }
+        );
+
+        if (!response.ok) {
+          throw new Error("Review data is unavailable.");
+        }
+
+        const review = reviewResponseSchema.parse(await response.json());
+        setReviewData(review);
+        setReviewPhase(
+          review.client.reviewStatus === "Ready for adviser review"
+            ? "prepared"
+            : "ready"
+        );
+      } catch {
+        if (!controller.signal.aborted) {
+          setLoadError(
+            "Review data is unavailable. Check that the API and local PostgreSQL database are running."
+          );
+        }
+      }
+    };
+
+    void loadReview();
+
+    return () => {
+      controller.abort();
+    };
+  }, [apiBaseUrl]);
+
+  const handlePrepareReview = async () => {
+    setReviewPhase("preparing");
+    setLoadError(null);
+
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/prepare-review`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        throw new Error("Review preparation failed.");
+      }
+
+      const preparedReview = reviewResponseSchema.parse(await response.json());
+      setReviewData(preparedReview);
+      setReviewPhase("prepared");
+    } catch {
+      setReviewPhase(reviewData ? "prepared" : "ready");
+      setLoadError(
+        "Review preparation failed. Check that the API and database are available."
+      );
+    }
   };
 
-  const handleDecision = (
-    actionId: Parameters<typeof updateActionDecision>[1],
-    decision: Parameters<typeof updateActionDecision>[2]
-  ) => {
-    setWorkflow((currentWorkflow) =>
-      updateActionDecision(currentWorkflow, actionId, decision)
-    );
+  const handleDecision = async (factId: string, decision: DecisionType) => {
+    setSavingFactId(factId);
+    setLoadError(null);
+
+    try {
+      const payload = adviserDecisionPayloadSchema.parse({
+        decision,
+        note: `Local demo decision: ${decision}. No production CRM was updated.`
+      });
+      const response = await fetch(
+        `${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/facts/${factId}/decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Could not save decision.");
+      }
+
+      const updatedReview = reviewResponseSchema.parse(await response.json());
+      setReviewData(updatedReview);
+      setReviewPhase("prepared");
+    } catch {
+      setLoadError(
+        "The adviser decision could not be saved. No production CRM was updated."
+      );
+    } finally {
+      setSavingFactId(null);
+    }
   };
 
-  const isPrepared = workflow.phase === "prepared";
-  const isPreparing = workflow.phase === "preparing";
-  const reviewStatus = getReviewStatusLabel(workflow.phase);
-  const prepareButtonLabel = getPrepareButtonLabel(workflow.phase);
+  const handleResetDemo = async () => {
+    setIsResetting(true);
+    setLoadError(null);
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/demo/reset`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        throw new Error("Could not reset demo.");
+      }
+
+      const resetReview = reviewResponseSchema.parse(await response.json());
+      setReviewData(resetReview);
+      setReviewPhase("ready");
+      setSelectedFact(null);
+    } catch {
+      setLoadError("The local demo reset failed. Check the API and database.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const isLoading = !reviewData && !loadError;
+  const isPrepared = reviewPhase === "prepared";
+  const isPreparing = reviewPhase === "preparing";
+  const reviewStatus = getReviewStatusLabel(reviewPhase);
+  const prepareButtonLabel = getPrepareButtonLabel(reviewPhase);
 
   return (
     <main className="min-h-screen bg-stone-50 text-slate-950">
@@ -106,16 +214,16 @@ export const App = () => {
               </h1>
               <div className="mt-5 flex flex-wrap gap-3 text-sm text-slate-700">
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">
-                  Alex Taylor
+                  {reviewData?.client.name ?? "Alex Taylor"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  2026 Annual Review
+                  {reviewData ? `${reviewData.client.reviewYear} Annual Review` : "2026 Annual Review"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  Adviser: Jordan Lee
+                  Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
                 </span>
                 <span className="rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-amber-800">
-                  {reviewStatus}
+                  {reviewData?.client.reviewStatus ?? reviewStatus}
                 </span>
               </div>
             </div>
@@ -123,47 +231,74 @@ export const App = () => {
               <ApiStatusBadge status={apiStatus} />
               <button
                 className="rounded bg-cyan-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-700 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={isPreparing}
+                disabled={isPreparing || isLoading}
                 type="button"
                 onClick={handlePrepareReview}
               >
                 {prepareButtonLabel}
               </button>
+              <button
+                className="text-xs font-semibold text-slate-500 underline-offset-4 hover:text-slate-800 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={isResetting || isLoading}
+                type="button"
+                onClick={handleResetDemo}
+              >
+                {isResetting ? "Resetting local demo..." : "Reset local demo data"}
+              </button>
             </div>
           </div>
 
-          {!isPrepared ? (
+          {loadError ? (
+            <div className="rounded border border-rose-200 bg-rose-50 p-5 text-sm leading-6 text-rose-800">
+              {loadError}
+            </div>
+          ) : null}
+
+          {isLoading ? (
             <div className="rounded border border-slate-200 bg-slate-50 p-5">
-              <p className="text-sm font-semibold text-slate-900">Ready to prepare</p>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-650">
-                Three fictional source records are loaded. Start the preparation
-                run to reconcile current facts, preserve superseded history, and
-                surface the items that need adviser confirmation.
+              <p className="text-sm font-semibold text-slate-900">
+                Loading review data
+              </p>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                Connecting to the review API and local PostgreSQL-backed demo data.
               </p>
             </div>
-          ) : (
-            <SummaryMetrics metrics={demoClientReview.summaryMetrics} />
-          )}
+          ) : null}
+
+          {reviewData && !isPrepared ? (
+            <div className="rounded border border-slate-200 bg-slate-50 p-5">
+              <p className="text-sm font-semibold text-slate-900">Ready to prepare</p>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                Three fictional source records are loaded from the database. Start
+                the preparation run to reconcile current facts, preserve superseded
+                history, and surface the items that need adviser confirmation.
+              </p>
+            </div>
+          ) : null}
+
+          {reviewData && isPrepared ? (
+            <SummaryMetrics metrics={reviewData.summaryMetrics} />
+          ) : null}
         </div>
       </section>
 
       <section className="mx-auto grid w-full max-w-7xl gap-6 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-8">
         <div className="space-y-6">
-          {isPrepared ? (
+          {reviewData && isPrepared ? (
             <>
               <CurrentClientPicture
-                facts={demoClientReview.clientFacts}
+                facts={reviewData.clientFacts}
                 onSelectFact={setSelectedFact}
               />
               <div className="grid gap-6 xl:grid-cols-2">
-                <MeaningfulChanges changes={demoClientReview.meaningfulChanges} />
+                <MeaningfulChanges changes={reviewData.meaningfulChanges} />
                 <AdviserActions
-                  decisions={workflow.actionDecisions}
-                  items={demoClientReview.adviserActions}
+                  savingFactId={savingFactId}
+                  items={reviewData.adviserActions}
                   onDecision={handleDecision}
                 />
               </div>
-              <ExecutionTrace items={executionTrace} />
+              <ExecutionTrace items={reviewData.workflowTrace} />
             </>
           ) : (
             <div className="rounded border border-dashed border-slate-300 bg-white p-8 text-center">
@@ -171,15 +306,15 @@ export const App = () => {
                 Adviser workspace will appear here
               </h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-                The demo run is deterministic and local to the browser. It does
-                not call AI, update a CRM, or generate financial recommendations.
+                The demo run is deterministic. It does not call AI, update a
+                production CRM, or generate financial recommendations.
               </p>
             </div>
           )}
         </div>
 
         <aside className="space-y-6">
-          <SourceRecordPanel records={sourceRecords} />
+          <SourceRecordPanel records={reviewData?.sourceRecords ?? []} />
         </aside>
       </section>
 

@@ -1,37 +1,54 @@
 import { StatusBadge } from "./StatusBadge.js";
-import type {
-  ActionDecision,
-  AdviserAction,
-  AdviserActionId
-} from "../types/demo.js";
+import type { ActionDecision, AdviserAction } from "../types/demo.js";
 
 type AdviserActionsProps = {
   items: AdviserAction[];
-  decisions: Record<AdviserActionId, ActionDecision>;
-  onDecision: (actionId: AdviserActionId, decision: ActionDecision) => void;
+  savingFactId: string | null;
+  onDecision: (factId: string, decision: ActionDecision) => void;
 };
 
-const decisionLabels: Partial<Record<ActionDecision, string>> = {
-  approved:
-    "Local demo decision: approved for this presentation only. No production CRM was updated.",
-  "kept-current":
-    "Local demo decision: current value kept for this presentation only. No production CRM was updated.",
-  confirmed:
-    "Local demo decision: confirmed for this presentation only. No production CRM was updated.",
-  unverified:
-    "Local demo decision: left unverified for this presentation only. No production CRM was updated."
+const decisionLabels: Record<ActionDecision, string> = {
+  APPROVE: "Approved",
+  CONFIRM: "Confirmed",
+  KEEP_CURRENT: "Current value kept",
+  LEAVE_UNVERIFIED: "Left unverified"
+};
+
+const selectedButtonClass =
+  "border-slate-900 bg-slate-900 text-white hover:bg-slate-700 focus:ring-slate-900";
+const unselectedButtonClass =
+  "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-700";
+
+export const isDecisionButtonSelected = (
+  item: AdviserAction,
+  decision: ActionDecision
+) => item.latestDecision?.decision === decision;
+
+export const getDecisionButtonClass = (
+  item: AdviserAction,
+  decision: ActionDecision,
+  isPrimary: boolean
+) => {
+  const hasPersistedDecision = item.latestDecision !== null;
+  const isSelected = hasPersistedDecision
+    ? isDecisionButtonSelected(item, decision)
+    : isPrimary;
+
+  return `rounded border px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${
+    isSelected ? selectedButtonClass : unselectedButtonClass
+  }`;
 };
 
 export const AdviserActions = ({
   items,
-  decisions,
+  savingFactId,
   onDecision
 }: AdviserActionsProps) => (
   <section className="rounded border border-slate-200 bg-white p-5 shadow-sm">
     <h2 className="text-lg font-semibold text-slate-950">Adviser actions</h2>
     <div className="mt-4 space-y-4">
       {items.map((item) => {
-        const decision = decisions[item.id];
+        const isSaving = savingFactId === item.factId;
 
         return (
           <article className="rounded border border-slate-200 p-4" key={item.id}>
@@ -48,22 +65,46 @@ export const AdviserActions = ({
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button
-                className="rounded bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2"
+                aria-pressed={isDecisionButtonSelected(
+                  item,
+                  item.primaryDecision
+                )}
+                className={getDecisionButtonClass(
+                  item,
+                  item.primaryDecision,
+                  true
+                )}
+                disabled={isSaving}
                 type="button"
-                onClick={() => onDecision(item.id, item.primaryDecision)}
+                onClick={() => onDecision(item.factId, item.primaryDecision)}
               >
                 {item.primaryLabel}
               </button>
               <button
-                className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-700 focus:ring-offset-2"
+                aria-pressed={isDecisionButtonSelected(
+                  item,
+                  item.secondaryDecision
+                )}
+                className={getDecisionButtonClass(
+                  item,
+                  item.secondaryDecision,
+                  false
+                )}
+                disabled={isSaving}
                 type="button"
-                onClick={() => onDecision(item.id, item.secondaryDecision)}
+                onClick={() => onDecision(item.factId, item.secondaryDecision)}
               >
                 {item.secondaryLabel}
               </button>
-              {decision !== "pending" ? (
+              {isSaving ? (
+                <span className="text-xs font-medium text-slate-600">
+                  Saving local demo decision...
+                </span>
+              ) : null}
+              {item.latestDecision ? (
                 <span className="rounded border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-medium leading-5 text-cyan-900">
-                  {decisionLabels[decision]}
+                  Local demo decision: {decisionLabels[item.latestDecision.decision]}.
+                  No production CRM was updated.
                 </span>
               ) : null}
             </div>
