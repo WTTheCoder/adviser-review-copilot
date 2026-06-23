@@ -2,13 +2,21 @@
 
 Client Review Prep Agent is a prototype for financial advisers preparing annual client reviews. The long-term direction is to prepare source-backed review material from fragmented legacy CRM records, review documents, and meeting notes.
 
-This repository is not a production financial-advice system and does not contain real customer data, proprietary branding, or model-provider integrations.
+This repository is not a production financial-advice system and does not contain real customer data, proprietary branding, or hardcoded model-provider secrets.
 
 ## Current Milestone
 
-Phase 4 adds a deterministic controlled-skills execution layer while preserving the adviser-facing React workspace and PostgreSQL-backed Phase 3 behavior. Review preparation and adviser decisions now route through a typed execution harness with registered skills, registered tools, allowlists, Zod validation, safe failure responses, and visible execution metadata.
+Phase 5 adds a controlled OpenAI model boundary for candidate-fact extraction from adviser meeting notes while preserving the adviser-facing React workspace and PostgreSQL-backed Phase 3/4 behavior. Review preparation and adviser decisions still route through a typed execution harness with registered skills, registered tools, allowlists, Zod validation, safe failure responses, and visible execution metadata.
 
-OpenAI, model-provider orchestration, dynamic skills, authentication, document upload, PDF parsing, and real financial recommendations are still deferred.
+Mock extraction is the safe default and works offline. Optional live OpenAI extraction uses the official OpenAI SDK and Responses API when `AI_MODE=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are configured.
+
+Phase 5 extraction candidates now drive the adviser-facing candidate projection for address and risk profile while official facts remain backend-controlled. Empty extraction clears the current candidate projection for those fields rather than showing stale seeded candidates. Numeric extraction remains advisory until deterministic normalization is expanded.
+
+Risk-profile candidates are normalized by application-owned domain logic before projection. The Phase 5 canonical set is `Conservative`, `Balanced`, `Growth-oriented`, and `High Growth`; unsupported or ambiguous model phrases are omitted rather than stored as arbitrary risk-profile values.
+
+The `Items needing confirmation` summary metric is a combined unresolved-review count for facts in `NEEDS_CONFIRMATION` or `REQUIRES_ADVISER_APPROVAL`. `Meaningful changes` combines the fictional verified historical changes with currently visible candidate changes from the latest preparation projection.
+
+Dynamic skills, authentication, document upload, PDF parsing, and real financial recommendations are still deferred.
 
 ## Architecture
 
@@ -18,6 +26,7 @@ React adviser workspace
 -> controlled execution harness
 -> registered skills
 -> allowlisted tools
+-> controlled candidate-fact extractor
 -> review service
 -> controlled legacy CRM adapter
 -> PostgreSQL
@@ -27,10 +36,13 @@ The legacy CRM adapter is a deliberate backend boundary. It simulates an existin
 
 Phase 4 skills are deterministic TypeScript modules, not model prompts. The harness validates skill inputs, enforces tool allowlists, validates tool and skill outputs, records execution events, and returns safe error messages.
 
+Phase 5 model output is advisory. The model returns schema-constrained candidate facts only; deterministic application rules decide what remains pending confirmation, requires adviser approval, or stays advisory.
+
 ## Repository Structure
 
 - `apps/web`: React, TypeScript, Vite, and Tailwind CSS frontend.
 - `apps/api`: Node.js, TypeScript, Fastify API, controlled execution harness, deterministic skills/tools, Prisma schema, migrations, and seed script.
+- `apps/api/src/ai`: Candidate-fact extraction contracts, schemas, prompt builder, mock provider, OpenAI provider adapter, and small eval fixtures.
 - `packages/shared`: Shared TypeScript types and Zod schemas for API contracts.
 - `docs/architecture`: Architecture notes for the controlled skills and harness boundary.
 - `.github/workflows/ci.yml`: CI for lint, type checking, tests, and builds.
@@ -43,6 +55,14 @@ npm install
 ```
 
 Copy `.env.example` to `.env` if you want local environment variables available in your shell. `.env` remains ignored by Git.
+
+AI configuration:
+
+- `AI_MODE=mock`: offline deterministic extraction, safe default.
+- `AI_MODE=openai`: uses the official OpenAI SDK and Responses API.
+- `OPENAI_API_KEY`: required only for live OpenAI mode.
+- `OPENAI_MODEL`: required only for live OpenAI mode.
+- `OPENAI_TIMEOUT_MS=15000`: live request timeout.
 
 ## Database
 
@@ -129,12 +149,22 @@ Registered tools:
 - `legacy.getClient`
 - `legacy.getSourceRecords`
 - `legacy.getFacts`
+- `ai.extractCandidateFacts`
 - `review.createWorkflowRun`
 - `review.recordWorkflowStep`
 - `review.getPreparedReview`
 - `review.applyDecision`
 
-The frontend displays the selected or executed skill in the review workspace and keeps the existing execution trace visible. Re-running preparation is supported; repeated runs create a new workflow run without duplicating seeded facts or source records.
+The frontend displays the selected or executed skill and extraction mode in the review workspace and keeps the existing execution trace visible. Re-running preparation is supported; repeated runs create a new workflow run without duplicating seeded facts or source records.
+
+Extraction limits:
+
+- Meeting-note text sent to the extractor is capped at 4,000 characters.
+- At most 10 candidate facts are accepted.
+- Evidence text is capped at 240 characters.
+- Proposed values are capped at 160 characters.
+
+Only the fictional adviser meeting-note text, safe client display name, source metadata, and narrow supported-field list are sent to OpenAI in live mode. API keys, audit history, database rows, chain of thought, raw provider payloads, and unrelated customer data are not sent or stored by this prototype.
 
 ## Demonstration Workflow
 
@@ -144,4 +174,4 @@ The workflow persists preparation results, adviser decisions, and audit trace re
 
 ## Later Milestones
 
-OpenAI and model-selected skills are intentionally not included in this milestone. Future phases can add model routing behind the harness, richer validation policies, authentication, document ingestion, and deployment hardening.
+Model-selected skills are intentionally not included in this milestone. Future phases can add model routing behind the harness, richer validation policies, authentication, document ingestion, and deployment hardening.

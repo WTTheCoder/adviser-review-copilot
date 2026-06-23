@@ -1,6 +1,6 @@
 # Controlled Skills and Execution Harness
 
-Phase 4 introduces a deterministic execution layer for the Client Review Prep Agent. It prepares the codebase for later model-assisted orchestration without giving future model-provider code direct access to the database or unrestricted backend functions.
+The deterministic execution layer for the Client Review Prep Agent prepares adviser-facing reviews without giving model-provider code direct access to the database or unrestricted backend functions.
 
 ## Dependency Direction
 
@@ -12,11 +12,12 @@ server.ts / application runtime composition
 -> SkillDefinition
 -> ToolRegistry
 -> ToolDefinition
+-> CandidateFactExtractor
 -> services and adapters
 -> Prisma/PostgreSQL
 ```
 
-The composition root constructs the Prisma-backed review service, legacy adapter, registries, tools, skills, and harness before injecting route dependencies. Routes choose a known skill name and pass request data into the injected harness. Skills can only use tools listed in their `allowedTools`. Tools are the only harness-facing layer that calls services or adapters.
+The composition root constructs the Prisma-backed review service, AI extractor, legacy adapter, registries, tools, skills, and harness before injecting route dependencies. Routes choose a known skill name and pass request data into the injected harness. Skills can only use tools listed in their `allowedTools`. Tools are the only harness-facing layer that calls services, adapters, or the candidate-fact extractor.
 
 The React app consumes normal API responses and optional execution metadata. It does not call skills or tools directly.
 
@@ -27,9 +28,12 @@ The React app consumes normal API responses and optional execution metadata. It 
 1. Validate skill input.
 2. Create a persisted workflow run.
 3. Load client context through legacy CRM tools.
-4. Reconcile facts deterministically.
-5. Persist execution-trace steps.
-6. Return the prepared review response with execution metadata.
+4. Extract candidate facts through the controlled model boundary.
+5. Classify extracted candidates through application rules.
+6. Replace the current preparation candidate projection without promoting official values.
+7. Reconcile facts deterministically.
+8. Persist execution-trace steps.
+9. Return the prepared review response with execution and extraction metadata.
 
 `POST /api/clients/:clientId/facts/:factId/decision` runs `apply-adviser-decision`:
 
@@ -59,9 +63,9 @@ The harness rejects unknown skills, invalid skill inputs, invalid skill outputs,
 
 The legacy CRM adapter simulates fragmented source systems while keeping the prototype deterministic. It gives future controlled skills a realistic backend boundary to operate through without exposing UI code to legacy-system details.
 
-## Future Model Provider Boundary
+## Model Provider Boundary
 
-Phase 5 or later model integrations should select from registered skills or provide validated inputs to registered skills. Model-provider code must not call Prisma, database clients, or arbitrary services directly.
+Phase 5 model extraction operates through the registered `ai.extractCandidateFacts` tool and returns schema-validated candidate facts. Future model integrations should continue to select from registered skills or provide validated inputs to registered skills. Model-provider code must not call Prisma, database clients, or arbitrary services directly.
 
 This keeps the future agent surface auditable:
 
@@ -73,4 +77,4 @@ This keeps the future agent surface auditable:
 
 ## Trade-offs
 
-This phase adds some ceremony before model providers exist. The benefit is a clear contract for later agentic behavior and a small blast radius for future changes. Current skills are intentionally deterministic so tests can cover behavior without network calls, secrets, or model availability.
+This layer adds some ceremony around a small model boundary. The benefit is a clear contract for agentic behavior and a small blast radius for future changes. Current tests remain deterministic so behavior can be covered without network calls, secrets, or model availability.

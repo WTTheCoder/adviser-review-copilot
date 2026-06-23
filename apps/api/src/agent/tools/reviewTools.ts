@@ -3,6 +3,7 @@ import {
   adviserDecisionPayloadSchema,
   reviewResponseSchema
 } from "@client-review-prep/shared";
+import { calendarDateSchema } from "../../ai/contracts/calendarDateSchema.js";
 import type { ToolDefinition } from "./toolTypes.js";
 import type { createReviewService } from "../../services/reviewService.js";
 
@@ -10,6 +11,7 @@ export type ReviewToolService = Pick<
   ReturnType<typeof createReviewService>,
   | "createWorkflowRun"
   | "recordWorkflowStep"
+  | "applyExtractedCandidateProjection"
   | "buildReviewResponse"
   | "recordDecision"
 >;
@@ -38,6 +40,34 @@ const recordWorkflowStepOutputSchema = z.object({
 
 const getPreparedReviewInputSchema = z.object({
   clientId: z.string().min(1)
+});
+
+const extractedCandidateProjectionSchema = z.object({
+  field: z.enum([
+    "ADDRESS",
+    "RISK_PROFILE",
+    "FINANCIAL_GOAL",
+    "EMPLOYMENT",
+    "ANNUAL_INCOME",
+    "SUPERANNUATION"
+  ]),
+  proposedValue: z.string().min(1).max(160),
+  applicationStatus: z.enum([
+    "NEEDS_CONFIRMATION",
+    "REQUIRES_ADVISER_APPROVAL",
+    "CANDIDATE_REVIEW"
+  ]),
+  sourceRecordId: z.string().min(1).max(80),
+  observedDate: calendarDateSchema
+});
+
+const applyExtractedCandidateProjectionInputSchema = z.object({
+  clientId: z.string().min(1),
+  candidates: z.array(extractedCandidateProjectionSchema).max(10)
+});
+
+const applyExtractedCandidateProjectionOutputSchema = z.object({
+  applied: z.boolean()
 });
 
 const applyDecisionInputSchema = z.object({
@@ -103,6 +133,22 @@ export const createReviewTools = (
     execute: async ({ clientId }) => reviewService.buildReviewResponse(clientId)
   };
 
+  const applyExtractedCandidateProjection: ToolDefinition<
+    typeof applyExtractedCandidateProjectionInputSchema,
+    typeof applyExtractedCandidateProjectionOutputSchema
+  > = {
+    name: "review.applyExtractedCandidateProjection",
+    description:
+      "Replace the current preparation candidate projection using deterministic application rules.",
+    inputSchema: applyExtractedCandidateProjectionInputSchema,
+    outputSchema: applyExtractedCandidateProjectionOutputSchema,
+    risk: "MEDIUM",
+    execute: async ({ clientId, candidates }) => {
+      await reviewService.applyExtractedCandidateProjection(clientId, candidates);
+      return { applied: true };
+    }
+  };
+
   const applyDecision: ToolDefinition<
     typeof applyDecisionInputSchema,
     typeof reviewResponseSchema
@@ -119,6 +165,7 @@ export const createReviewTools = (
   return [
     createWorkflowRun,
     recordWorkflowStep,
+    applyExtractedCandidateProjection,
     getPreparedReview,
     applyDecision
   ] as const;

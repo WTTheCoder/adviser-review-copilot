@@ -1,6 +1,12 @@
 import { LifecycleStatus } from "@prisma/client";
 import { describe, expect, it } from "vitest";
-import { mapFactToDto, type FactForReview } from "./reviewService.js";
+import {
+  buildMeaningfulChanges,
+  buildSummaryMetrics,
+  countUnresolvedReviewItems,
+  mapFactToDto,
+  type FactForReview
+} from "./reviewService.js";
 
 const createFact = (
   overrides: Partial<FactForReview> = {}
@@ -108,5 +114,52 @@ describe("review service read-back mapping", () => {
     expect(dto.officialValue).toBe("Balanced");
     expect(dto.candidateValue).toBe("Growth-oriented");
     expect(dto.status).toBe("Requires adviser approval");
+  });
+
+  it("derives unresolved-review metrics from final fact projection", () => {
+    const facts = [
+      createFact(),
+      createFact({
+        id: "fact-risk-profile",
+        field: "Risk profile",
+        candidateValue: "Growth-oriented",
+        lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+      })
+    ];
+    const changes = buildMeaningfulChanges(facts);
+    const metrics = buildSummaryMetrics(facts, changes);
+
+    expect(countUnresolvedReviewItems(facts)).toBe(2);
+    expect(
+      metrics.find((metric) => metric.label === "Items needing confirmation")
+        ?.value
+    ).toBe("2");
+    expect(metrics.find((metric) => metric.label === "Meaningful changes")?.value)
+      .toBe("6");
+  });
+
+  it("does not count cleared candidates as unresolved or candidate-driven changes", () => {
+    const facts = [
+      createFact({
+        candidateValue: null,
+        lifecycleStatus: LifecycleStatus.CURRENT
+      }),
+      createFact({
+        id: "fact-risk-profile",
+        field: "Risk profile",
+        candidateValue: null,
+        lifecycleStatus: LifecycleStatus.CURRENT
+      })
+    ];
+    const changes = buildMeaningfulChanges(facts);
+    const metrics = buildSummaryMetrics(facts, changes);
+
+    expect(countUnresolvedReviewItems(facts)).toBe(0);
+    expect(metrics.find((metric) => metric.label === "Meaningful changes")?.value)
+      .toBe("4");
+    expect(
+      metrics.find((metric) => metric.label === "Items needing confirmation")
+        ?.value
+    ).toBe("0");
   });
 });

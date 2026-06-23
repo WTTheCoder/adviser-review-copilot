@@ -25,6 +25,13 @@ export const workflowStepStatusSchema = z.enum(["COMPLETE", "ESCALATED", "FAILED
 
 export const confidenceSchema = z.enum(["High", "Medium", "Low"]);
 
+export const extractionMetadataSchema = z.object({
+  providerMode: z.enum(["mock", "openai"]),
+  model: z.string().nullable(),
+  candidateCount: z.number().int().nonnegative().max(10),
+  warnings: z.array(z.string())
+});
+
 export const adviserDecisionPayloadSchema = z.object({
   decision: decisionTypeSchema,
   note: z.string().max(500).optional()
@@ -110,7 +117,8 @@ export const reviewResponseSchema = z.object({
       skillVersion: z.string().nullable(),
       status: z.enum(["SUCCEEDED", "FAILED"])
     })
-    .optional()
+    .optional(),
+  extractionMetadata: extractionMetadataSchema.optional()
 });
 
 export type LifecycleStatus = z.infer<typeof lifecycleStatusSchema>;
@@ -122,3 +130,4 @@ export type ReviewResponse = z.infer<typeof reviewResponseSchema>;
 export type SourceRecordDto = z.infer<typeof sourceRecordSchema>;
 export type ClientFactDto = z.infer<typeof clientFactSchema>;
 export type AdviserActionDto = z.infer<typeof adviserActionSchema>;
+export type ExtractionMetadata = z.infer<typeof extractionMetadataSchema>;

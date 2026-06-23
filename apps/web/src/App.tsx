@@ -204,6 +204,27 @@ export const App = () => {
       ? `Executed skill: ${reviewData.executionMetadata.skillName}`
       : `Selected skill: ${reviewData.executionMetadata.skillName}`
     : "Selected skill: prepare-annual-review";
+  const extractionLabel = reviewData?.extractionMetadata
+    ? reviewData.extractionMetadata.warnings.some((warning) =>
+        warning.includes("Mock extraction was used")
+      )
+      ? "Extraction: Mock fallback"
+      : reviewData.extractionMetadata.providerMode === "openai"
+      ? `Extraction: OpenAI - ${reviewData.extractionMetadata.model ?? "configured model"}`
+      : "Extraction: Mock"
+    : null;
+  const extractionWarning = reviewData?.extractionMetadata?.warnings[0] ?? null;
+  const currentSelectedFact =
+    selectedFact && reviewData
+      ? reviewData.clientFacts.find((fact) => fact.id === selectedFact.id) ??
+        selectedFact
+      : selectedFact;
+  const selectedFactAction =
+    currentSelectedFact && reviewData
+      ? reviewData.adviserActions.find(
+          (action) => action.factId === currentSelectedFact.id
+        ) ?? null
+      : null;
 
   return (
     <main className="min-h-screen bg-stone-50 text-slate-950">
@@ -285,6 +306,12 @@ export const App = () => {
             <>
               <div className="text-xs font-semibold text-slate-500">
                 {skillLabel}
+                {extractionLabel ? (
+                  <span className="ml-3 text-slate-400">{extractionLabel}</span>
+                ) : null}
+                {extractionWarning ? (
+                  <span className="ml-3 text-amber-700">{extractionWarning}</span>
+                ) : null}
               </div>
               <SummaryMetrics metrics={reviewData.summaryMetrics} />
             </>
@@ -303,6 +330,7 @@ export const App = () => {
               <div className="grid gap-6 xl:grid-cols-2">
                 <MeaningfulChanges changes={reviewData.meaningfulChanges} />
                 <AdviserActions
+                  facts={reviewData.clientFacts}
                   savingFactId={savingFactId}
                   items={reviewData.adviserActions}
                   onDecision={handleDecision}
@@ -328,7 +356,11 @@ export const App = () => {
         </aside>
       </section>
 
-      <EvidenceDrawer fact={selectedFact} onClose={() => setSelectedFact(null)} />
+      <EvidenceDrawer
+        adviserAction={selectedFactAction}
+        fact={currentSelectedFact}
+        onClose={() => setSelectedFact(null)}
+      />
     </main>
   );
 };

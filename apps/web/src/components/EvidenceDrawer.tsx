@@ -1,15 +1,23 @@
 import { StatusBadge } from "./StatusBadge.js";
-import type { ClientFact } from "../types/demo.js";
+import type { AdviserAction, ClientFact } from "../types/demo.js";
+import { getEvidenceExplanation } from "../domain/factPresentation.js";
 
 type EvidenceDrawerProps = {
   fact: ClientFact | null;
+  adviserAction?: AdviserAction | null;
   onClose: () => void;
 };
 
-export const EvidenceDrawer = ({ fact, onClose }: EvidenceDrawerProps) => {
+export const EvidenceDrawer = ({
+  fact,
+  adviserAction = null,
+  onClose
+}: EvidenceDrawerProps) => {
   if (!fact) {
     return null;
   }
+
+  const explanation = getEvidenceExplanation(fact, adviserAction);
 
   return (
     <div
@@ -116,7 +124,7 @@ export const EvidenceDrawer = ({ fact, onClose }: EvidenceDrawerProps) => {
               Why is this remembered?
             </h3>
             <p className="mt-2 text-sm leading-6 text-slate-700">
-              {fact.memoryExplanation}
+              {explanation}
             </p>
           </section>
         </div>
