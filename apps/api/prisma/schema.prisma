@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SourceRecordType {
+  LEGACY_CRM
+  ANNUAL_REVIEW
+  ADVISER_MEETING_NOTE
+}
+
+enum LifecycleStatus {
+  CURRENT
+  SUPERSEDED
+  NEEDS_CONFIRMATION
+  REQUIRES_ADVISER_APPROVAL
+}
+
+enum DecisionType {
+  CONFIRM
+  LEAVE_UNVERIFIED
+  APPROVE
+  KEEP_CURRENT
+}
+
+enum WorkflowRunStatus {
+  PREPARING
+  PREPARED
+  FAILED
+}
+
+enum WorkflowStepStatus {
+  COMPLETE
+  ESCALATED
+  FAILED
+}
+
+model Client {
+  id               String            @id
+  name             String
+  adviserName      String
+  reviewYear       Int
+  reviewStatus     String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sourceRecords    SourceRecord[]
+  clientFacts      ClientFact[]
+  adviserDecisions AdviserDecision[]
+  workflowRuns     WorkflowRun[]
+}
+
+model SourceRecord {
+  id              String           @id
+  clientId        String
+  type            SourceRecordType
+  title           String
+  observedAt      DateTime
+  summary         String
+  content         Json
+  lifecycleStatus LifecycleStatus
+  createdAt       DateTime         @default(now())
+  client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  facts           ClientFact[]
+
+  @@index([clientId])
+}
+
+model ClientFact {
+  id               String            @id
+  clientId         String
+  field            String
+  officialValue    String
+  candidateValue   String?
+  previousValue    String?
+  sourceRecordId   String
+  observedAt       DateTime
+  confidence       String
+  lifecycleStatus  LifecycleStatus
+  explanation      String
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  client           Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceRecord     SourceRecord      @relation(fields: [sourceRecordId], references: [id])
+  adviserDecisions AdviserDecision[]
+
+  @@index([clientId])
+  @@index([sourceRecordId])
+}
+
+model AdviserDecision {
+  id           String       @id
+  clientId     String
+  factId       String
+  decisionType DecisionType
+  note         String?
+  createdAt    DateTime     @default(now())
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  fact         ClientFact   @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([factId])
+}
+
+model WorkflowRun {
+  id          String            @id
+  clientId    String
+  status      WorkflowRunStatus
+  startedAt   DateTime          @default(now())
+  completedAt DateTime?
+  client      Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  steps       WorkflowStep[]
+
+  @@index([clientId])
+}
+
+model WorkflowStep {
+  id            String             @id
+  workflowRunId String
+  sequence      Int
+  label         String
+  status        WorkflowStepStatus
+  detail        String?
+  workflowRun   WorkflowRun        @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@index([workflowRunId])
+}

@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { StatusBadge } from "./StatusBadge.js";
-import type { SourceRecord, SourceRecordId } from "../types/demo.js";
+import type { SourceRecord } from "../types/demo.js";
 
 type SourceRecordPanelProps = {
   records: SourceRecord[];
 };
 
 export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
-  const [selectedRecordId, setSelectedRecordId] = useState<SourceRecordId>(
-    records[0]?.id ?? "legacy-crm"
+  const [selectedRecordId, setSelectedRecordId] = useState<string>(
+    records[0]?.id ?? ""
   );
   const selectedRecord =
     records.find((record) => record.id === selectedRecordId) ?? records[0];
@@ -57,7 +57,9 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
               </div>
               <StatusBadge
                 status={
-                  selectedRecord.id === "legacy-crm" ? "Superseded" : "Current"
+                  selectedRecord.lifecycleStatus === "SUPERSEDED"
+                    ? "Superseded"
+                    : "Current"
                 }
               />
             </div>

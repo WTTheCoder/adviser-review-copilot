@@ -5,8 +5,15 @@ type ExecutionTraceProps = {
 };
 
 const traceStyles: Record<ExecutionTraceItem["status"], string> = {
-  Complete: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  Escalated: "border-amber-200 bg-amber-50 text-amber-800"
+  COMPLETE: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  ESCALATED: "border-amber-200 bg-amber-50 text-amber-800",
+  FAILED: "border-rose-200 bg-rose-50 text-rose-800"
+};
+
+const traceLabels: Record<ExecutionTraceItem["status"], string> = {
+  COMPLETE: "Complete",
+  ESCALATED: "Escalated",
+  FAILED: "Failed"
 };
 
 export const ExecutionTrace = ({ items }: ExecutionTraceProps) => (
@@ -21,7 +28,7 @@ export const ExecutionTrace = ({ items }: ExecutionTraceProps) => (
           <span
             className={`rounded border px-2 py-1 text-xs font-semibold ${traceStyles[item.status]}`}
           >
-            {item.status}
+            {traceLabels[item.status]}
           </span>
         </li>
       ))}
