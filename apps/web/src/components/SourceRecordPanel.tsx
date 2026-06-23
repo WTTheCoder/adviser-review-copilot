@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StatusBadge } from "./StatusBadge.js";
+import { resolveSelectedSourceRecordId } from "../domain/sourceRecordSelection.js";
 import type { SourceRecord } from "../types/demo.js";
 
 type SourceRecordPanelProps = {
@@ -10,6 +11,11 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
   const [selectedRecordId, setSelectedRecordId] = useState<string>(
     records[0]?.id ?? ""
   );
+  useEffect(() => {
+    setSelectedRecordId((current) =>
+      resolveSelectedSourceRecordId(records, current)
+    );
+  }, [records]);
   const selectedRecord =
     records.find((record) => record.id === selectedRecordId) ?? records[0];
 
@@ -40,6 +46,11 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
               <span className="mt-1 block text-xs text-slate-600">
                 Observed: {record.observedDate}
               </span>
+              {record.upload ? (
+                <span className="mt-1 block text-xs font-medium text-cyan-800">
+                  Uploaded file: {record.upload.safeFilename}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -54,6 +65,14 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
                 <p className="mt-1 text-xs text-slate-600">
                   Observed: {selectedRecord.observedDate}
                 </p>
+                {selectedRecord.upload ? (
+                  <p className="mt-1 text-xs text-cyan-800">
+                    Uploaded {selectedRecord.upload.safeFilename} -{" "}
+                    {selectedRecord.upload.characterCount} characters -{" "}
+                    {selectedRecord.upload.byteCount} bytes -{" "}
+                    {selectedRecord.upload.mediaType}
+                  </p>
+                ) : null}
               </div>
               <StatusBadge
                 status={

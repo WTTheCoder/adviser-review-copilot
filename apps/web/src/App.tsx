@@ -14,13 +14,19 @@ import { EvidenceDrawer } from "./components/EvidenceDrawer.js";
 import { ExecutionTrace } from "./components/ExecutionTrace.js";
 import { MeaningfulChanges } from "./components/MeaningfulChanges.js";
 import { SourceRecordPanel } from "./components/SourceRecordPanel.js";
+import { SourceUploadPanel } from "./components/SourceUploadPanel.js";
 import { SummaryMetrics } from "./components/SummaryMetrics.js";
+import { UploadExecutionTrace } from "./components/UploadExecutionTrace.js";
+import {
+  clearUploadTrace,
+  replaceUploadTrace
+} from "./domain/uploadTraceState.js";
 import {
   getPrepareButtonLabel,
   getReviewStatusLabel,
   type ReviewPhase
 } from "./domain/reviewWorkflow.js";
-import type { ClientFact } from "./types/demo.js";
+import type { ClientFact, UploadExecutionMetadata } from "./types/demo.js";
 
 const DEMO_CLIENT_ID = "demo-alex-taylor";
 
@@ -32,6 +38,9 @@ export const App = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savingFactId, setSavingFactId] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [latestUploadTrace, setLatestUploadTrace] =
+    useState<UploadExecutionMetadata | null>(null);
+  const [uploadPanelResetToken, setUploadPanelResetToken] = useState(0);
   const apiBaseUrl = useMemo(
     () => import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001",
     []
@@ -187,11 +196,29 @@ export const App = () => {
       setReviewData(resetReview);
       setReviewPhase("ready");
       setSelectedFact(null);
+      setLatestUploadTrace(clearUploadTrace());
+      setUploadPanelResetToken((current) => current + 1);
     } catch {
       setLoadError("The local demo reset failed. Check the API and database.");
     } finally {
       setIsResetting(false);
     }
+  };
+
+  const refreshReview = async () => {
+    const response = await fetch(`${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/review`);
+
+    if (!response.ok) {
+      throw new Error("Review data is unavailable.");
+    }
+
+    const review = reviewResponseSchema.parse(await response.json());
+    setReviewData(review);
+    setReviewPhase(
+      review.client.reviewStatus === "Ready for adviser review"
+        ? "prepared"
+        : "ready"
+    );
   };
 
   const isLoading = !reviewData && !loadError;
@@ -352,6 +379,16 @@ export const App = () => {
         </div>
 
         <aside className="space-y-6">
+          <SourceUploadPanel
+            apiBaseUrl={apiBaseUrl}
+            clientId={DEMO_CLIENT_ID}
+            resetToken={uploadPanelResetToken}
+            onUploaded={(upload) => {
+              setLatestUploadTrace(replaceUploadTrace(upload));
+              void refreshReview();
+            }}
+          />
+          <UploadExecutionTrace metadata={latestUploadTrace} />
           <SourceRecordPanel records={reviewData?.sourceRecords ?? []} />
         </aside>
       </section>

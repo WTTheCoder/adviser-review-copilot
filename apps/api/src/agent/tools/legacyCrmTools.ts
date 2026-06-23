@@ -1,7 +1,8 @@
 import { z } from "zod";
 import {
   clientFactSchema,
-  sourceRecordSchema
+  sourceRecordSchema,
+  type SourceRecordDto
 } from "@client-review-prep/shared";
 import type { ToolDefinition } from "./toolTypes.js";
 import type { FactForReview } from "../../services/reviewService.js";
@@ -54,10 +55,32 @@ const currentLabelForField = (field: string) => {
   return "Current";
 };
 
-const contentToLines = (content: unknown): string[] =>
-  Array.isArray(content) && content.every((line) => typeof line === "string")
-    ? content
-    : [];
+const isUploadedContent = (
+  content: unknown
+): content is { lines: string[]; upload: NonNullable<SourceRecordDto["upload"]> } =>
+  typeof content === "object" &&
+  content !== null &&
+  Array.isArray((content as { lines?: unknown }).lines) &&
+  (content as { lines: unknown[] }).lines.every(
+    (line) => typeof line === "string"
+  ) &&
+  typeof (content as { upload?: unknown }).upload === "object" &&
+  (content as { upload?: unknown }).upload !== null;
+
+const contentToLines = (content: unknown): string[] => {
+  if (Array.isArray(content) && content.every((line) => typeof line === "string")) {
+    return content;
+  }
+
+  if (isUploadedContent(content)) {
+    return content.lines;
+  }
+
+  return [];
+};
+
+const contentToUpload = (content: unknown): SourceRecordDto["upload"] =>
+  isUploadedContent(content) ? content.upload : null;
 
 export type LegacyCrmToolAdapter = {
   getLegacyClientRecord: (clientId: string) => Promise<{
@@ -125,7 +148,8 @@ export const createLegacyCrmTools = (legacyAdapter: LegacyCrmToolAdapter) => {
         observedDate: formatDate(record.observedAt),
         summary: record.summary,
         content: contentToLines(record.content),
-        lifecycleStatus: record.lifecycleStatus
+        lifecycleStatus: record.lifecycleStatus,
+        upload: contentToUpload(record.content)
       }));
     }
   };

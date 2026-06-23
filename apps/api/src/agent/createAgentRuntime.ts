@@ -3,12 +3,14 @@ import type { createReviewService } from "../services/reviewService.js";
 import { ExecutionHarness } from "./harness/executionHarness.js";
 import { SkillRegistry } from "./registry/skillRegistry.js";
 import { applyAdviserDecisionSkill } from "./skills/applyAdviserDecisionSkill.js";
+import { ingestClientDocumentSkill } from "./skills/ingestClientDocumentSkill.js";
 import { loadClientContextSkill } from "./skills/loadClientContextSkill.js";
 import { prepareAnnualReviewSkill } from "./skills/prepareAnnualReviewSkill.js";
 import { reconcileClientFactsSkill } from "./skills/reconcileClientFactsSkill.js";
 import { createLegacyCrmTools } from "./tools/legacyCrmTools.js";
 import { createReviewTools } from "./tools/reviewTools.js";
 import { createAiExtractionTools } from "./tools/aiExtractionTools.js";
+import { createDocumentTools } from "./tools/documentTools.js";
 import { ToolRegistry } from "./tools/toolRegistry.js";
 import type { PrismaClient } from "@prisma/client";
 import type { CandidateFactExtractor } from "../ai/contracts/candidateFactExtractor.js";
@@ -25,6 +27,7 @@ export const createAgentRuntime = (
   for (const skill of [
     loadClientContextSkill,
     reconcileClientFactsSkill,
+    ingestClientDocumentSkill,
     prepareAnnualReviewSkill,
     applyAdviserDecisionSkill
   ]) {
@@ -34,6 +37,7 @@ export const createAgentRuntime = (
   const legacyAdapter = createLegacyCrmAdapter(prisma);
   for (const tool of [
     ...createLegacyCrmTools(legacyAdapter),
+    ...createDocumentTools(),
     ...createReviewTools(reviewService),
     ...createAiExtractionTools(candidateFactExtractor)
   ]) {

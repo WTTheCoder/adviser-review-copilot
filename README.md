@@ -6,7 +6,7 @@ This repository is not a production financial-advice system and does not contain
 
 ## Current Milestone
 
-Phase 5 adds a controlled OpenAI model boundary for candidate-fact extraction from adviser meeting notes while preserving the adviser-facing React workspace and PostgreSQL-backed Phase 3/4 behavior. Review preparation and adviser decisions still route through a typed execution harness with registered skills, registered tools, allowlists, Zod validation, safe failure responses, and visible execution metadata.
+Phase 6A adds controlled text-document ingestion for `.txt` and `.md` adviser notes while preserving the adviser-facing React workspace and PostgreSQL-backed Phase 3/4 behavior. Review preparation, document ingestion, and adviser decisions route through a typed execution harness with registered skills, registered tools, allowlists, Zod validation, safe failure responses, and visible execution metadata.
 
 Mock extraction is the safe default and works offline. Optional live OpenAI extraction uses the official OpenAI SDK and Responses API when `AI_MODE=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are configured.
 
@@ -16,7 +16,7 @@ Risk-profile candidates are normalized by application-owned domain logic before 
 
 The `Items needing confirmation` summary metric is a combined unresolved-review count for facts in `NEEDS_CONFIRMATION` or `REQUIRES_ADVISER_APPROVAL`. `Meaningful changes` combines the fictional verified historical changes with currently visible candidate changes from the latest preparation projection.
 
-Dynamic skills, authentication, document upload, PDF parsing, and real financial recommendations are still deferred.
+Dynamic skills, authentication, PDF/DOCX parsing, OCR, malware scanning services, cloud object storage, and real financial recommendations are still deferred.
 
 ## Architecture
 
@@ -26,6 +26,7 @@ React adviser workspace
 -> controlled execution harness
 -> registered skills
 -> allowlisted tools
+-> text-document validation and SourceRecord persistence
 -> controlled candidate-fact extractor
 -> review service
 -> controlled legacy CRM adapter
@@ -130,10 +131,25 @@ GitHub Actions runs lint, type checking, tests, and production builds for pushes
 - `GET /health`: API health check.
 - `GET /api/clients/:clientId/review`: Returns client summary, source records, facts, meaningful changes, adviser actions, and latest workflow trace.
 - `POST /api/clients/:clientId/prepare-review`: Creates or refreshes a deterministic workflow run and returns prepared review data.
+- `POST /api/clients/:clientId/source-records/upload`: Validates one local `.txt` or `.md` source document and stores it as an adviser meeting-note source record.
 - `POST /api/clients/:clientId/facts/:factId/decision`: Persists one adviser decision and lets backend domain logic update fact state.
 - `POST /api/demo/reset`: Local demonstration reset for the fictional Alex Taylor data.
 
-The reset endpoint is for local demonstration only.
+The reset endpoint is for local demonstration only. It reseeds the fictional Alex Taylor data and removes uploaded demo source records.
+
+## Text Document Uploads
+
+Phase 6A supports one local UTF-8 `.txt` or `.md` upload at a time for the fictional Alex Taylor client. The upload limit is 256 KB by server-calculated UTF-8 byte length and 256K decoded characters. Browser MIME inconsistencies are handled with a narrow `application/octet-stream` fallback, but unsupported extensions and media types are rejected.
+
+The upload API uses a bounded JSON/text protocol in this phase. True multipart streaming is deferred to Phase 6B.
+
+Uploaded filenames are treated as untrusted display metadata: path components are stripped, traversal and control characters are rejected, length is limited, and filenames are never used as server filesystem paths. Uploaded Markdown is displayed as plain text, not rendered as HTML.
+
+For this local prototype, validated text and structured upload metadata are stored in PostgreSQL on the existing `SourceRecord` row. This is not the production storage design for large documents. Future phases should add production retention policy, object storage, malware scanning, richer document parsing, and authentication before real use.
+
+Uploaded source text is untrusted data. It can be used as evidence for candidate extraction, but it cannot choose tools, execute instructions, approve facts, write to a production CRM, read server files, or access secrets.
+
+Source-record selection for preparation is ordered by newest observed date, uploaded records first when dates tie, then stable source-record ID.
 
 ## Controlled Skills and Tools
 
@@ -142,6 +158,7 @@ Registered skills:
 - `load-client-context`: Loads a client, source records, and known facts through legacy CRM tools.
 - `reconcile-client-facts`: Reconciles loaded facts into adviser-review items.
 - `prepare-annual-review`: Coordinates review preparation, workflow trace persistence, and review response generation.
+- `ingest-client-document`: Validates and persists one local text upload as a source record.
 - `apply-adviser-decision`: Applies one adviser decision through deterministic backend domain rules.
 
 Registered tools:
@@ -149,9 +166,11 @@ Registered tools:
 - `legacy.getClient`
 - `legacy.getSourceRecords`
 - `legacy.getFacts`
+- `document.validateTextUpload`
 - `ai.extractCandidateFacts`
 - `review.createWorkflowRun`
 - `review.recordWorkflowStep`
+- `review.createUploadedSourceRecord`
 - `review.getPreparedReview`
 - `review.applyDecision`
 
@@ -168,10 +187,10 @@ Only the fictional adviser meeting-note text, safe client display name, source m
 
 ## Demonstration Workflow
 
-The seeded demo uses one fictional client, Alex Taylor, advised by Jordan Lee for the 2026 Annual Review. It loads three source records: a 2023 legacy CRM record, a 2025 annual review, and a 2026 adviser meeting note.
+The seeded demo uses one fictional client, Alex Taylor, advised by Jordan Lee for the 2026 Annual Review. It loads three source records: a 2023 legacy CRM record, a 2025 annual review, and a 2026 adviser meeting note. You can add one `.txt` or `.md` note from the upload panel, then run Prepare/Re-run to extract candidate address and risk-profile changes from the uploaded source in mock mode.
 
 The workflow persists preparation results, adviser decisions, and audit trace records in PostgreSQL. Refreshing the browser after preparation or after adviser decisions keeps the persisted state visible.
 
 ## Later Milestones
 
-Model-selected skills are intentionally not included in this milestone. Future phases can add model routing behind the harness, richer validation policies, authentication, document ingestion, and deployment hardening.
+Model-selected skills are intentionally not included in this milestone. Phase 6B deferrals include PDF/DOCX parsing, images and OCR, multiple-file batch upload, cloud object storage, malware scanning services, authentication, production CRM writes, and deployment hardening.
