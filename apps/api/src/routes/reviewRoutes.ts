@@ -1,19 +1,50 @@
 import {
   adviserDecisionPayloadSchema,
+  type ReviewResponse,
   reviewResponseSchema
 } from "@client-review-prep/shared";
 import type { FastifyInstance } from "fastify";
+import type { ExecutionResult } from "../agent/harness/executionResult.js";
 import { DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
-import { prisma } from "../db/prisma.js";
-import { createReviewService } from "../services/reviewService.js";
+import type { createReviewService } from "../services/reviewService.js";
 
-type ReviewService = ReturnType<typeof createReviewService>;
+export type ReviewRouteService = Pick<
+  ReturnType<typeof createReviewService>,
+  "buildReviewResponse" | "resetDemo"
+>;
+
+type ReviewRouteSkillName = "prepare-annual-review" | "apply-adviser-decision";
+
+export type ReviewRouteHarness = {
+  execute: (
+    skillName: ReviewRouteSkillName,
+    input: unknown,
+    outputSchema: typeof reviewResponseSchema,
+    clientId: string
+  ) => Promise<ExecutionResult<ReviewResponse>>;
+};
+
+export type ReviewRouteDependencies = {
+  reviewService: ReviewRouteService;
+  harness: ReviewRouteHarness;
+};
+
+const withExecutionMetadata = (
+  result: Extract<ExecutionResult<ReviewResponse>, { ok: true }>
+) =>
+  reviewResponseSchema.parse({
+    ...result.output,
+    executionMetadata: {
+      skillName: result.metadata.skillName,
+      skillVersion: result.metadata.skillVersion,
+      status: result.metadata.status
+    }
+  });
 
 export const registerReviewRoutes = async (
   server: FastifyInstance,
-  reviewService: ReviewService = createReviewService(prisma)
+  { reviewService, harness }: ReviewRouteDependencies
 ) => {
-
   server.get("/api/clients/:clientId/review", async (request, reply) => {
     const { clientId } = request.params as { clientId: string };
 
@@ -33,13 +64,19 @@ export const registerReviewRoutes = async (
   server.post("/api/clients/:clientId/prepare-review", async (request, reply) => {
     const { clientId } = request.params as { clientId: string };
 
-    try {
-      const review = await reviewService.prepareReview(clientId);
-      return reviewResponseSchema.parse(review);
-    } catch (error) {
-      request.log.error(error);
-      return reply.status(503).send({ message: "Review preparation failed." });
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId },
+      reviewResponseSchema,
+      clientId
+    );
+
+    if (!result.ok) {
+      request.log.warn({ code: result.error.code }, "Review preparation failed");
+      return reply.status(400).send({ message: result.error.message });
     }
+
+    return withExecutionMetadata(result);
   });
 
   server.post(
@@ -55,24 +92,23 @@ export const registerReviewRoutes = async (
         return reply.status(400).send({ message: "Invalid adviser decision." });
       }
 
-      try {
-        const review = await reviewService.recordDecision(
+      const result = await harness.execute(
+        "apply-adviser-decision",
+        {
           clientId,
           factId,
-          payloadResult.data
-        );
-        return reviewResponseSchema.parse(review);
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          ["FACT_NOT_FOUND", "INVALID_DECISION_FOR_FACT"].includes(error.message)
-        ) {
-          return reply.status(400).send({ message: "Invalid adviser decision." });
-        }
+          payload: payloadResult.data
+        },
+        reviewResponseSchema,
+        clientId
+      );
 
-        request.log.error(error);
-        return reply.status(503).send({ message: "Could not save decision." });
+      if (!result.ok) {
+        request.log.warn({ code: result.error.code }, "Could not save decision");
+        return reply.status(400).send({ message: result.error.message });
       }
+
+      return withExecutionMetadata(result);
     }
   );
 

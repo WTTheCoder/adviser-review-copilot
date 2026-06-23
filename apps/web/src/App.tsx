@@ -199,6 +199,11 @@ export const App = () => {
   const isPreparing = reviewPhase === "preparing";
   const reviewStatus = getReviewStatusLabel(reviewPhase);
   const prepareButtonLabel = getPrepareButtonLabel(reviewPhase);
+  const skillLabel = reviewData?.executionMetadata
+    ? reviewData.executionMetadata.skillName === "apply-adviser-decision"
+      ? `Executed skill: ${reviewData.executionMetadata.skillName}`
+      : `Selected skill: ${reviewData.executionMetadata.skillName}`
+    : "Selected skill: prepare-annual-review";
 
   return (
     <main className="min-h-screen bg-stone-50 text-slate-950">
@@ -277,7 +282,12 @@ export const App = () => {
           ) : null}
 
           {reviewData && isPrepared ? (
-            <SummaryMetrics metrics={reviewData.summaryMetrics} />
+            <>
+              <div className="text-xs font-semibold text-slate-500">
+                {skillLabel}
+              </div>
+              <SummaryMetrics metrics={reviewData.summaryMetrics} />
+            </>
           ) : null}
         </div>
       </section>
