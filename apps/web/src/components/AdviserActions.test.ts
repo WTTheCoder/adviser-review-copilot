@@ -181,14 +181,14 @@ describe("AdviserActions presentation mapping", () => {
         currentLabel: "Official value",
         currentValue: "Balanced",
         officialValue: "Balanced",
-        candidateValue: "Growth-oriented",
+        candidateValue: "High Growth",
         lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
         status: "Requires adviser approval"
       })
     );
 
     expect(presentation.title).toBe(
-      "Review the possible change from Balanced to Growth-oriented"
+      "Review the possible change from Balanced to High Growth"
     );
     expect(presentation.detail).toContain(staleRiskPhrase);
   });
@@ -197,6 +197,7 @@ describe("AdviserActions presentation mapping", () => {
     const action = createAction("APPROVE", "KEEP_CURRENT", {
       decision: "APPROVE",
       note: null,
+      candidateValue: "High Growth",
       createdAt: "2026-06-23T00:00:00.000Z"
     });
     const presentation = getAdviserActionPresentation(
@@ -205,8 +206,8 @@ describe("AdviserActions presentation mapping", () => {
         id: "fact-risk-profile",
         field: "Risk profile",
         currentLabel: "Official value",
-        currentValue: "Growth-oriented",
-        officialValue: "Growth-oriented",
+        currentValue: "High Growth",
+        officialValue: "High Growth",
         candidateValue: null,
         previousValue: "Balanced",
         lifecycleStatus: "CURRENT",
@@ -214,9 +215,9 @@ describe("AdviserActions presentation mapping", () => {
       })
     );
 
-    expect(presentation.title).toContain("Growth-oriented risk profile approved");
+    expect(presentation.title).toContain("High Growth risk profile approved");
     expect(presentation.detail).toContain(
-      "Growth-oriented is now the official risk profile"
+      "High Growth is now the official risk profile"
     );
     expect(presentation.detail).toContain("Balanced is retained");
     expectNoCompletedStaleCopy(presentation);
@@ -227,6 +228,7 @@ describe("AdviserActions presentation mapping", () => {
     const action = createAction("APPROVE", "KEEP_CURRENT", {
       decision: "KEEP_CURRENT",
       note: null,
+      candidateValue: "High Growth",
       createdAt: "2026-06-23T00:00:00.000Z"
     });
     const presentation = getAdviserActionPresentation(
@@ -243,11 +245,11 @@ describe("AdviserActions presentation mapping", () => {
       })
     );
 
-    expect(presentation.title).toContain("Current risk profile retained");
+    expect(presentation.title).toContain("Balanced risk profile retained");
     expect(presentation.detail).toContain(
       "Balanced remains the official risk profile"
     );
-    expect(presentation.detail).toContain("candidate was not promoted");
+    expect(presentation.detail).toContain("High Growth was not promoted");
     expectNoCompletedStaleCopy(presentation);
     expect(isDecisionButtonSelected(action, "KEEP_CURRENT")).toBe(true);
   });
@@ -256,6 +258,7 @@ describe("AdviserActions presentation mapping", () => {
     const action = createAction("APPROVE", "KEEP_CURRENT", {
       decision: "APPROVE",
       note: "Local demo decision: APPROVE. No production CRM was updated.",
+      candidateValue: "High Growth",
       createdAt: "2026-06-23T00:00:00.000Z"
     });
     const presentation = getAdviserActionPresentation(
@@ -264,8 +267,8 @@ describe("AdviserActions presentation mapping", () => {
         id: "fact-risk-profile",
         field: "Risk profile",
         currentLabel: "Official value",
-        currentValue: "Growth-oriented",
-        officialValue: "Growth-oriented",
+        currentValue: "High Growth",
+        officialValue: "High Growth",
         candidateValue: null,
         previousValue: "Balanced",
         lifecycleStatus: "CURRENT",
@@ -274,10 +277,35 @@ describe("AdviserActions presentation mapping", () => {
     );
 
     expect(presentation.detail).toContain(
-      "Growth-oriented is now the official risk profile"
+      "High Growth is now the official risk profile"
     );
     expectNoCompletedStaleCopy(presentation);
     expect(isDecisionButtonSelected(action, "APPROVE")).toBe(true);
     expect(isDecisionButtonSelected(action, "KEEP_CURRENT")).toBe(false);
+  });
+
+  it("never describes unchanged Balanced as newly approved", () => {
+    const action = createAction("APPROVE", "KEEP_CURRENT", {
+      decision: "APPROVE",
+      note: null,
+      candidateValue: "Balanced",
+      createdAt: "2026-06-23T00:00:00.000Z"
+    });
+    const presentation = getAdviserActionPresentation(
+      action,
+      createFact({
+        id: "fact-risk-profile",
+        field: "Risk profile",
+        currentValue: "Balanced",
+        officialValue: "Balanced",
+        candidateValue: null,
+        previousValue: null,
+        lifecycleStatus: "CURRENT",
+        status: "Current"
+      })
+    );
+
+    expect(presentation.title).not.toContain("Balanced risk profile approved");
+    expect(presentation.detail).not.toContain("approved Balanced");
   });
 });

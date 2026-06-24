@@ -182,6 +182,7 @@ export const App = () => {
   const handleResetDemo = async () => {
     setIsResetting(true);
     setLoadError(null);
+    setUploadPanelResetToken((current) => current + 1);
 
     try {
       const response = await fetch(`${apiBaseUrl}/api/demo/reset`, {
@@ -197,7 +198,6 @@ export const App = () => {
       setReviewPhase("ready");
       setSelectedFact(null);
       setLatestUploadTrace(clearUploadTrace());
-      setUploadPanelResetToken((current) => current + 1);
     } catch {
       setLoadError("The local demo reset failed. Check the API and database.");
     } finally {

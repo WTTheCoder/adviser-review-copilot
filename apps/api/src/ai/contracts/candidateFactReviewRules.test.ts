@@ -58,6 +58,21 @@ describe("candidate fact review rules", () => {
     ).toEqual([]);
   });
 
+  it.each([
+    "Alex does not want to move to High Growth.",
+    "Alex is not considering changing to High Growth.",
+    "Alex considered High Growth but decided to remain Balanced."
+  ])("omits rejected risk-profile evidence before projection: %s", (evidence) => {
+    expect(
+      classifyCandidateFacts([
+        {
+          ...createCandidate("RISK_PROFILE", "High Growth"),
+          evidence
+        }
+      ])
+    ).toEqual([]);
+  });
+
   it("overrides model-provided human-review flags", () => {
     expect(
       classifyCandidateFacts([

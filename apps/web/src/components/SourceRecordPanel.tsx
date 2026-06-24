@@ -65,13 +65,30 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
                 <p className="mt-1 text-xs text-slate-600">
                   Observed: {selectedRecord.observedDate}
                 </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Source type: {selectedRecord.type.replaceAll("_", " ")}
+                </p>
                 {selectedRecord.upload ? (
-                  <p className="mt-1 text-xs text-cyan-800">
-                    Uploaded {selectedRecord.upload.safeFilename} -{" "}
-                    {selectedRecord.upload.characterCount} characters -{" "}
-                    {selectedRecord.upload.byteCount} bytes -{" "}
-                    {selectedRecord.upload.mediaType}
-                  </p>
+                  <div className="mt-2 space-y-1 text-xs text-cyan-800">
+                    <p>
+                      Upload origin: {selectedRecord.upload.origin} -{" "}
+                      {selectedRecord.upload.safeFilename}
+                    </p>
+                    <p>
+                      Media type: {selectedRecord.upload.mediaType} -{" "}
+                      Original size:{" "}
+                      {selectedRecord.upload.originalByteCount ??
+                        selectedRecord.upload.byteCount}{" "}
+                      bytes
+                    </p>
+                    <p>
+                      {selectedRecord.upload.pageCount
+                        ? `${selectedRecord.upload.pageCount} pages - `
+                        : ""}
+                      {selectedRecord.upload.characterCount} extracted
+                      characters
+                    </p>
+                  </div>
                 ) : null}
               </div>
               <StatusBadge
@@ -85,16 +102,9 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
             <p className="mt-3 text-sm leading-6 text-slate-600">
               {selectedRecord.summary}
             </p>
-            <ul className="mt-4 space-y-2">
-              {selectedRecord.content.map((line) => (
-                <li
-                  className="rounded bg-white px-3 py-2 text-sm text-slate-700"
-                  key={line}
-                >
-                  {line}
-                </li>
-              ))}
-            </ul>
+            <pre className="mt-4 whitespace-pre-wrap rounded bg-white px-3 py-2 font-sans text-sm leading-6 text-slate-700">
+              {selectedRecord.content.join("\n")}
+            </pre>
           </article>
         ) : null}
       </div>

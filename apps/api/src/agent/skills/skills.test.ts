@@ -1,4 +1,5 @@
 import { DecisionType } from "@prisma/client";
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import type { ReviewResponse } from "@client-review-prep/shared";
 import { ExecutionHarness } from "../harness/executionHarness.js";
@@ -28,6 +29,10 @@ import type {
   CandidateFactExtractionResult
 } from "../../ai/contracts/candidateFactSchemas.js";
 import type { CandidateFactExtractor } from "../../ai/contracts/candidateFactExtractor.js";
+import {
+  createPdfTextExtractor,
+  type PdfParserAdapter
+} from "../../documents/pdfUpload.js";
 
 const createCandidateFact = (
   field: CandidateFact["field"],
@@ -56,6 +61,9 @@ const createExtractionResult = (
     candidateCount: candidateFacts.length
   }
 });
+
+const syntheticPdfBase64 =
+  "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxNjYgPj4Kc3RyZWFtCkJUIC9GMSAxMCBUZiA3MiA3MjAgVGQKKEFsZXggbWF5IGhhdmUgbW92ZWQgdG8gSm9vbmRhbHVwLCBidXQgdGhlIGFkZHJlc3MgaGFzIG5vdCBiZWVuIGNvbmZpcm1lZC4pIFRqCjAgLTE4IFRkIChBbGV4IGlzIGNvbnNpZGVyaW5nIGEgSGlnaCBHcm93dGggcmlzayBwcm9maWxlLikgVGoKRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDA0NTggMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo1MjgKJSVFT0Y=";
 
 const buildSummaryMetrics = (review: ReviewResponse) => {
   const unresolved = review.clientFacts.filter((fact) =>
@@ -156,7 +164,8 @@ const createReview = (): ReviewResponse => ({
 });
 
 const createHarness = (
-  extractor: CandidateFactExtractor = new MockCandidateFactExtractor()
+  extractor: CandidateFactExtractor = new MockCandidateFactExtractor(),
+  pdfParserAdapter?: PdfParserAdapter
 ) => {
   const skillRegistry = new SkillRegistry();
   const toolRegistry = new ToolRegistry();
@@ -250,16 +259,29 @@ const createHarness = (
         observedDate: input.observedDate,
         upload: {
           origin: "UPLOAD",
+          documentType: input.documentType,
           safeFilename: input.safeFilename,
-          mediaType: "text/plain",
+          mediaType:
+            input.documentType === "PDF" ? "application/pdf" : "text/plain",
           characterCount: input.characterCount,
           byteCount: input.byteCount,
+          originalByteCount: input.originalByteCount,
+          ...(input.documentType === "PDF"
+            ? {
+                pageCount: input.pageCount,
+                parser: input.parser
+              }
+            : {}),
           uploadedAt: "2026-06-04T00:00:00.000Z"
         }
       },
       safeFilename: input.safeFilename,
       characterCount: input.characterCount,
       byteCount: input.byteCount,
+      originalByteCount: input.originalByteCount,
+      ...(input.documentType === "PDF"
+        ? { pageCount: input.pageCount }
+        : {}),
       ingestionStatus: "validated"
     }),
     buildReviewResponse: async () => ({
@@ -311,7 +333,16 @@ const createHarness = (
   } satisfies ReviewToolService;
 
   for (const tool of [
-    ...createDocumentTools(),
+    ...createDocumentTools(
+      pdfParserAdapter
+        ? {
+            extractPdfText: createPdfTextExtractor(
+              pdfParserAdapter,
+              5
+            ).extract
+          }
+        : undefined
+    ),
     ...createAiExtractionTools(extractor),
     ...createLegacyCrmTools(legacyAdapter),
     ...createReviewTools(reviewService)
@@ -389,6 +420,7 @@ describe("required skills", () => {
         originalFilename: "client-note.txt",
         mediaType: "text/plain",
         sizeBytes: uploadedText.length,
+        documentType: "TEXT",
         text: uploadedText
       },
       documentUploadResultSchema,
@@ -420,6 +452,49 @@ describe("required skills", () => {
     expect(JSON.stringify(result.metadata.events)).not.toContain("C:\\Users");
   });
 
+  it("ingest-client-document validates, extracts, and stores a PDF through allowlisted tools", async () => {
+    const { harness } = createHarness();
+    const result = await harness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "alex-review.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 650,
+        documentType: "PDF",
+        base64Data: syntheticPdfBase64
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.output.sourceRecord.upload.mediaType : null).toBe(
+      "application/pdf"
+    );
+    expect(result.ok ? result.output.pageCount : null).toBe(1);
+    expect(result.metadata.events.map((event) => event.label)).toEqual(
+      expect.arrayContaining([
+        "Tool invoked: document.validatePdfUpload",
+        "PDF signature validated",
+        "PDF size validated",
+        "Tool invoked: document.extractPdfText",
+        "PDF text extraction started",
+        "PDF page limit validated",
+        "Extracted PDF text validated",
+        "Source record persisted"
+      ])
+    );
+    expect(JSON.stringify(result.metadata.events)).not.toContain(
+      syntheticPdfBase64
+    );
+    expect(JSON.stringify(result.metadata.events)).not.toContain(
+      "Alex may have moved to Joondalup"
+    );
+  });
+
   it("ingest-client-document rejects invalid upload input before tool execution", async () => {
     const { harness } = createHarness();
     const result = await harness.execute(
@@ -431,7 +506,8 @@ describe("required skills", () => {
         originalFilename: "client-note.pdf",
         mediaType: "application/pdf",
         sizeBytes: 12,
-        text: "not accepted"
+        documentType: "PDF",
+        base64Data: "bm90IGFjY2VwdGVk"
       },
       documentUploadResultSchema,
       "demo-alex-taylor"
@@ -441,6 +517,73 @@ describe("required skills", () => {
     expect(result.ok ? null : result.error.code).toBe("INVALID_SKILL_INPUT");
     expect(result.metadata.events.map((event) => event.label)).not.toContain(
       "Tool invoked: document.validateTextUpload"
+    );
+  });
+
+  it("does not persist a source record when PDF parsing fails", async () => {
+    const { harness } = createHarness();
+    const corruptPdf = Buffer.from("%PDF-1.4\ncorrupt", "ascii").toString(
+      "base64"
+    );
+    const result = await harness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "corrupt.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 16,
+        documentType: "PDF",
+        base64Data: corruptPdf
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+    const labels = result.metadata.events.map((event) => event.label);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("PDF_PARSE_FAILED");
+    expect(labels).toContain("Tool invoked: document.extractPdfText");
+    expect(labels).not.toContain(
+      "Tool invoked: review.createUploadedSourceRecord"
+    );
+    expect(labels).not.toContain("Source record persisted");
+  });
+
+  it("does not persist a source record when PDF parsing times out", async () => {
+    const { harness } = createHarness(
+      new MockCandidateFactExtractor(),
+      {
+        load: async () => new Promise(() => undefined)
+      }
+    );
+    const result = await harness.execute(
+      "ingest-client-document",
+      {
+        clientId: "demo-alex-taylor",
+        observedDate: "2026-06-04",
+        sourceType: "ADVISER_MEETING_NOTE",
+        originalFilename: "slow.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 650,
+        documentType: "PDF",
+        base64Data: syntheticPdfBase64
+      },
+      documentUploadResultSchema,
+      "demo-alex-taylor"
+    );
+    const labels = result.metadata.events.map((event) => event.label);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("PDF_PARSE_TIMEOUT");
+    expect(labels).toContain("PDF text extraction started");
+    expect(labels).not.toContain(
+      "Tool invoked: review.createUploadedSourceRecord"
+    );
+    expect(labels).not.toContain("Source record persisted");
+    expect(JSON.stringify(result.metadata.events)).not.toContain(
+      syntheticPdfBase64
     );
   });
 
@@ -501,6 +644,7 @@ describe("required skills", () => {
         originalFilename: "note.txt",
         mediaType: "text/plain",
         sizeBytes: 10,
+        documentType: "TEXT",
         text: "Valid text"
       },
       documentUploadResultSchema,
@@ -577,6 +721,143 @@ describe("required skills", () => {
       "openai"
     );
     expect(result.ok ? metricValue(result.output, "Items needing confirmation") : null).toBe("2");
+  });
+
+  it("projects High Growth as an unresolved candidate with final metrics", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult([
+          createCandidateFact("ADDRESS", "Joondalup"),
+          createCandidateFact("RISK_PROFILE", "High Growth")
+        ])
+    });
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk).toMatchObject({
+      officialValue: "Balanced",
+      candidateValue: "High Growth",
+      previousValue: null,
+      lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
+      sourceRecordId: "source-meeting-note"
+    });
+    expect(
+      result.ok
+        ? metricValue(result.output, "Meaningful changes")
+        : null
+    ).toBe("6");
+    expect(
+      result.ok
+        ? metricValue(result.output, "Items needing confirmation")
+        : null
+    ).toBe("2");
+  });
+
+  it("resolves Joondalup and High Growth with existing metric semantics", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult([
+          createCandidateFact("ADDRESS", "Joondalup"),
+          createCandidateFact("RISK_PROFILE", "High Growth")
+        ])
+    });
+
+    await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema
+    );
+    const confirmed = await harness.execute(
+      "apply-adviser-decision",
+      {
+        clientId: "demo-alex-taylor",
+        factId: "fact-address",
+        payload: { decision: DecisionType.CONFIRM }
+      },
+      reviewResponseSchema
+    );
+    expect(
+      confirmed.ok
+        ? metricValue(confirmed.output, "Meaningful changes")
+        : null
+    ).toBe("5");
+    expect(
+      confirmed.ok
+        ? metricValue(confirmed.output, "Items needing confirmation")
+        : null
+    ).toBe("1");
+
+    const approved = await harness.execute(
+      "apply-adviser-decision",
+      {
+        clientId: "demo-alex-taylor",
+        factId: "fact-risk-profile",
+        payload: { decision: DecisionType.APPROVE }
+      },
+      reviewResponseSchema
+    );
+    const risk = approved.ok
+      ? approved.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk).toMatchObject({
+      officialValue: "High Growth",
+      previousValue: "Balanced",
+      candidateValue: null,
+      lifecycleStatus: "CURRENT"
+    });
+    expect(
+      approved.ok
+        ? metricValue(approved.output, "Meaningful changes")
+        : null
+    ).toBe("4");
+    expect(
+      approved.ok
+        ? metricValue(approved.output, "Items needing confirmation")
+        : null
+    ).toBe("0");
+  });
+
+  it("KEEP_CURRENT retains Balanced and clears High Growth", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult([
+          createCandidateFact("RISK_PROFILE", "High Growth")
+        ])
+    });
+
+    await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema
+    );
+    const kept = await harness.execute(
+      "apply-adviser-decision",
+      {
+        clientId: "demo-alex-taylor",
+        factId: "fact-risk-profile",
+        payload: { decision: DecisionType.KEEP_CURRENT }
+      },
+      reviewResponseSchema
+    );
+    const risk = kept.ok
+      ? kept.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk).toMatchObject({
+      officialValue: "Balanced",
+      previousValue: null,
+      candidateValue: null,
+      lifecycleStatus: "CURRENT"
+    });
   });
 
   it("normalizes free-form live risk-profile candidates before projection", async () => {

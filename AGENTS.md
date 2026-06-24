@@ -17,6 +17,8 @@
 - Keep deterministic application rules authoritative over model claims.
 - Do not log secrets, raw provider payloads, raw prompts, or full untrusted source text by default.
 - Keep tests network-free by default and preserve functional mock mode.
-- Route text-document ingestion through the fixed upload API, `ingest-client-document` skill, and allowlisted document/review tools.
-- Treat uploaded document content and filenames as untrusted data; never use client-supplied filenames as filesystem paths or render uploaded Markdown as HTML.
-- Preserve the Phase 6A upload scope unless explicitly changed: one UTF-8 `.txt` or `.md` file, bounded size, PostgreSQL text storage for the local demo only.
+- Route document ingestion through the fixed upload API, `ingest-client-document` skill, and allowlisted document/review tools.
+- Treat uploaded document content, PDF bytes, extracted text, and filenames as untrusted data; never use client-supplied filenames as filesystem paths or render uploaded content as HTML.
+- Keep PDF parser imports behind the application-owned wrapper. Do not expose parser errors, raw bytes, stack traces, local paths, or full extracted text in traces.
+- Preserve the single-process upload/reset coordinator and parser wait timeout. Do not describe either as a substitute for distributed coordination or worker/process isolation.
+- Preserve the Phase 6B1 scope unless explicitly changed: one `.txt`, `.md`, or text-based `.pdf` file, bounded server-authoritative limits, no OCR, no raw PDF persistence, and PostgreSQL normalized-text storage for the local demo only.

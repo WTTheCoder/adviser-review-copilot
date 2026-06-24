@@ -5,8 +5,10 @@ import {
   reviewResponseSchema
 } from "@client-review-prep/shared";
 import { calendarDateSchema } from "../../ai/contracts/calendarDateSchema.js";
+import { ExecutionError } from "../harness/executionErrors.js";
 import type { ToolDefinition } from "./toolTypes.js";
 import type { createReviewService } from "../../services/reviewService.js";
+import { validatedDocumentForPersistenceSchema } from "./documentTools.js";
 
 export type ReviewToolService = Pick<
   ReturnType<typeof createReviewService>,
@@ -77,19 +79,6 @@ const applyDecisionInputSchema = z.object({
   factId: z.string().min(1),
   payload: adviserDecisionPayloadSchema
 });
-
-const createUploadedSourceRecordInputSchema = z
-  .object({
-    clientId: z.string().min(1).max(80),
-    observedDate: calendarDateSchema,
-    sourceType: z.literal("ADVISER_MEETING_NOTE"),
-    safeFilename: z.string().min(1).max(120),
-    mediaType: z.string().min(1).max(120),
-    text: z.string().min(1),
-    characterCount: z.number().int().positive(),
-    byteCount: z.number().int().positive()
-  })
-  .strict();
 
 export const createReviewTools = (
   reviewService: ReviewToolService
@@ -173,17 +162,29 @@ export const createReviewTools = (
     inputSchema: applyDecisionInputSchema,
     outputSchema: reviewResponseSchema,
     risk: "HIGH",
-    execute: async ({ clientId, factId, payload }) =>
-      reviewService.recordDecision(clientId, factId, payload)
+    execute: async ({ clientId, factId, payload }) => {
+      try {
+        return await reviewService.recordDecision(clientId, factId, payload);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "INVALID_DECISION_FOR_FACT"
+        ) {
+          throw new ExecutionError("INVALID_ADVISER_DECISION");
+        }
+        throw error;
+      }
+    }
   };
 
   const createUploadedSourceRecord: ToolDefinition<
-    typeof createUploadedSourceRecordInputSchema,
+    typeof validatedDocumentForPersistenceSchema,
     typeof documentUploadResultSchema
   > = {
     name: "review.createUploadedSourceRecord",
-    description: "Persist a validated text upload as a source record.",
-    inputSchema: createUploadedSourceRecordInputSchema,
+    description:
+      "Persist validated normalized document text and safe upload metadata.",
+    inputSchema: validatedDocumentForPersistenceSchema,
     outputSchema: documentUploadResultSchema,
     risk: "MEDIUM",
     execute: async (input) => reviewService.createUploadedSourceRecord(input)

@@ -111,8 +111,53 @@ describe("decision rules", () => {
   });
 
   it("rejects invalid decision combinations", () => {
-    expect(isDecisionAllowedForFact("fact-address", DecisionType.APPROVE)).toBe(
-      false
-    );
+    expect(
+      isDecisionAllowedForFact(
+        {
+          id: "fact-address",
+          officialValue: "East Perth",
+          candidateValue: "Subiaco",
+          lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION
+        },
+        DecisionType.APPROVE
+      )
+    ).toBe(false);
+  });
+
+  it("rejects APPROVE without a distinct unresolved risk candidate", () => {
+    expect(
+      isDecisionAllowedForFact(
+        {
+          id: "fact-risk-profile",
+          officialValue: "Balanced",
+          candidateValue: null,
+          lifecycleStatus: LifecycleStatus.CURRENT
+        },
+        DecisionType.APPROVE
+      )
+    ).toBe(false);
+    expect(
+      isDecisionAllowedForFact(
+        {
+          id: "fact-risk-profile",
+          officialValue: "Balanced",
+          candidateValue: "Balanced",
+          lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+        },
+        DecisionType.APPROVE
+      )
+    ).toBe(false);
+  });
+
+  it("allows APPROVE and KEEP_CURRENT only for a distinct unresolved risk candidate", () => {
+    const fact = {
+      id: "fact-risk-profile",
+      officialValue: "Balanced",
+      candidateValue: "High Growth",
+      lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+    };
+
+    expect(isDecisionAllowedForFact(fact, DecisionType.APPROVE)).toBe(true);
+    expect(isDecisionAllowedForFact(fact, DecisionType.KEEP_CURRENT)).toBe(true);
   });
 });

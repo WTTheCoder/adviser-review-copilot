@@ -17,7 +17,7 @@ const extractionInputSchema = z
     clientId: z.string().min(1),
     clientDisplayName: z.string().min(1),
     sourceRecordId: z.string().min(1),
-    sourceType: z.literal("ADVISER_MEETING_NOTE"),
+    sourceType: z.enum(["ADVISER_MEETING_NOTE", "UPLOADED_PDF"]),
     observedDate: calendarDateSchema,
     meetingNoteText: z.string().min(1).max(4000),
     supportedFields: z.array(supportedCandidateFieldSchema).nonempty()

@@ -15,7 +15,7 @@ The provider does not receive Prisma, Fastify, React, `ToolRegistry`, or `SkillR
 
 ## Data Sent In Live Mode
 
-Only the minimum meeting-note context is sent: safe client display name, source record ID and type, observed date, meeting-note text, and supported candidate fields. Uploaded text records use the same boundary after validation and persistence; the provider does not receive browser paths, local server paths, upload internals, database rows, adviser decisions, workflow traces, or unrelated records.
+Only the minimum source context is sent: safe client display name, source record ID and type, observed date, bounded normalized source text, and supported candidate fields. Uploaded PDFs are identified as `UPLOADED_PDF`; only extracted plain text crosses the model boundary. The provider does not receive raw PDF bytes, parser internals, embedded metadata, browser paths, local server paths, upload internals, database rows, adviser decisions, workflow traces, or unrelated records.
 
 The implementation does not send API keys, audit history, complete database rows, adviser decisions, workflow traces, unrelated records, or environment configuration.
 
@@ -27,7 +27,7 @@ Unsupported fields, excessive candidates, malformed dates, extra properties, and
 
 ## Prompt Injection Treatment
 
-Meeting-note text, including uploaded `.txt` and `.md` content, is untrusted. The prompt explicitly states that source text is data, not instructions, and wraps it in `<meeting_note>` delimiters. A note cannot choose skills, select tools, access secrets, approve facts, change schemas, read files, or update the database.
+Source text, including uploaded `.txt`, `.md`, and extracted `.pdf` content, is untrusted. The prompt explicitly states that source text is data, not instructions, and wraps it in `<source_document>` delimiters. A document cannot choose skills, select tools, access secrets, approve facts, change schemas, read files, or update the database.
 
 ## Mock And Live Modes
 
@@ -60,9 +60,9 @@ Financial-goal and numeric candidates are not promoted automatically. Numeric fi
 
 Risk profile is a controlled application-owned taxonomy in this prototype. The supported canonical values are `Conservative`, `Balanced`, `Growth-oriented`, and `High Growth`.
 
-The model may return natural-language evidence such as "more growth-oriented investment approach", but application domain logic normalizes supported phrases before candidate projection. Unsupported or ambiguous risk-profile phrases are omitted from the projection with a safe workflow trace entry; arbitrary model text is not persisted as a risk-profile candidate and cannot define the official taxonomy.
+The model may return natural-language evidence such as "more growth-oriented investment approach", but application domain logic normalizes supported phrases before candidate projection. Deterministic mock extraction collects ordered, bounded risk-relevant sentences within one source record and applies one application-owned aggregate intent classification before emitting a candidate. Negated, rejected, retained-current, contradictory evidence, and multiple different proposed canonical values are omitted rather than projected as positive changes. Supported and genuinely uncertain high-impact candidates still require adviser approval.
 
-This taxonomy is intentionally small for Phase 5 and is not production-complete.
+This taxonomy and sentence-level English intent handling are intentionally small for the fictional demo and are not production NLP. Conflict handling is source-record scoped; cross-source reconciliation continues to use the existing deterministic source selection and remains future work.
 
 ## Summary Metrics
 
@@ -74,4 +74,4 @@ Phase 5 reuses workflow trace entries and backwards-compatible response metadata
 
 ## Known Limitations
 
-This is not production-ready and does not claim regulatory compliance. Phase 6B should review PDF/DOCX parsing, OCR, malware scanning, retention policy, production document storage, authentication, live-model evaluation, richer diagnostics, stricter provider observability, and deterministic numeric normalization before expanding extraction beyond the fictional demo.
+This is not production-ready and does not claim regulatory compliance. Phase 6B2 should address OCR for scanned PDFs. Later work should review DOCX parsing, malware scanning, retention policy, production object storage, authentication, live-model evaluation, richer diagnostics, stricter provider observability, and deterministic numeric normalization before expanding extraction beyond the fictional demo.

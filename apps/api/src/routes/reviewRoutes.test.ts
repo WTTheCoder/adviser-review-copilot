@@ -1,10 +1,16 @@
 import Fastify from "fastify";
+import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import type {
   DocumentUploadResult,
   ExecutionTraceMetadata,
   ReviewResponse
 } from "@client-review-prep/shared";
+import {
+  maxDocumentUploadRequestBytes,
+  maxPdfBase64Length
+} from "@client-review-prep/shared";
+import { ClientOperationCoordinator } from "../services/clientOperationCoordinator.js";
 import {
   registerReviewRoutes,
   type ReviewRouteDependencies,
@@ -126,7 +132,8 @@ const createTestServer = async () => {
   } satisfies ReviewRouteHarness;
   const dependencies = {
     reviewService: service,
-    harness
+    harness,
+    clientOperations: new ClientOperationCoordinator()
   } satisfies ReviewRouteDependencies;
   await registerReviewRoutes(server, dependencies);
   return { server, service, harness, uploadExecutionMetadata };
@@ -214,6 +221,7 @@ describe("review routes", () => {
         originalFilename: "note.txt",
         mediaType: "text/plain",
         sizeBytes: 32,
+        documentType: "TEXT",
         text: "Alex may have moved to Fremantle."
       }
     });
@@ -236,6 +244,73 @@ describe("review routes", () => {
     await server.close();
   });
 
+  it("uploads a PDF source through the same fixed ingestion skill", async () => {
+    const { server, harness, uploadExecutionMetadata } =
+      await createTestServer();
+    const pdfUploadResponse: DocumentUploadResult = {
+      status: "stored",
+      sourceRecord: {
+        id: "source-upload-pdf",
+        clientId: "demo-alex-taylor",
+        type: "ADVISER_MEETING_NOTE",
+        title: "Uploaded: review.pdf",
+        observedDate: "2026-06-04",
+        upload: {
+          origin: "UPLOAD",
+          documentType: "PDF",
+          safeFilename: "review.pdf",
+          mediaType: "application/pdf",
+          characterCount: 120,
+          byteCount: 120,
+          originalByteCount: 650,
+          pageCount: 1,
+          parser: { name: "unpdf", version: "1.6.2" },
+          uploadedAt: "2026-06-04T00:00:00.000Z"
+        }
+      },
+      safeFilename: "review.pdf",
+      characterCount: 120,
+      byteCount: 120,
+      originalByteCount: 650,
+      pageCount: 1,
+      ingestionStatus: "validated"
+    };
+    harness.execute.mockResolvedValueOnce({
+      ok: true,
+      output: pdfUploadResponse,
+      metadata: uploadExecutionMetadata
+    });
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload: {
+        observedDate: "2026-06-04",
+        originalFilename: "review.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 8,
+        documentType: "PDF",
+        base64Data: "JVBERi0x"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sourceRecord.upload).toMatchObject({
+      mediaType: "application/pdf",
+      originalByteCount: 650,
+      pageCount: 1
+    });
+    expect(harness.execute).toHaveBeenCalledWith(
+      "ingest-client-document",
+      expect.objectContaining({
+        documentType: "PDF",
+        base64Data: "JVBERi0x"
+      }),
+      expect.anything(),
+      "demo-alex-taylor"
+    );
+    await server.close();
+  });
+
   it("returns the actual safe ingestion execution metadata for upload", async () => {
     const { server, uploadExecutionMetadata } = await createTestServer();
     const uploadedText = "Alex may have moved to Fremantle.";
@@ -248,6 +323,7 @@ describe("review routes", () => {
         originalFilename: dangerousOriginalFilename,
         mediaType: "text/plain",
         sizeBytes: uploadedText.length,
+        documentType: "TEXT",
         text: uploadedText
       }
     });
@@ -279,7 +355,8 @@ describe("review routes", () => {
         originalFilename: "note.pdf",
         mediaType: "application/pdf",
         sizeBytes: 1,
-        text: "x"
+        documentType: "PDF",
+        base64Data: "eA=="
       }
     });
 
@@ -313,6 +390,7 @@ describe("review routes", () => {
         originalFilename: "note.txt",
         mediaType: "text/plain",
         sizeBytes: 32,
+        documentType: "TEXT",
         text: "Alex may have moved to Fremantle."
       }
     });
@@ -323,6 +401,46 @@ describe("review routes", () => {
     );
     expect(response.body).not.toContain("SQL");
     expect(response.body).not.toContain("secret");
+    await server.close();
+  });
+
+  it("returns safe application-owned PDF parsing errors", async () => {
+    const { server, harness } = await createTestServer();
+    harness.execute.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "PDF_TEXT_NOT_AVAILABLE",
+        message:
+          "No selectable text was found. OCR for scanned PDFs is not supported yet."
+      },
+      metadata: {
+        skillName: "ingest-client-document",
+        skillVersion: "2",
+        status: "FAILED",
+        events: []
+      }
+    });
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload: {
+        observedDate: "2026-06-04",
+        originalFilename: "scan.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 8,
+        documentType: "PDF",
+        base64Data: "JVBERi0x"
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      code: "PDF_TEXT_NOT_AVAILABLE",
+      message:
+        "No selectable text was found. OCR for scanned PDFs is not supported yet."
+    });
+    expect(response.body).not.toContain("stack");
+    expect(response.body).not.toContain("C:\\");
     await server.close();
   });
 
@@ -347,6 +465,61 @@ describe("review routes", () => {
     await server.close();
   });
 
+  it("rejects oversized JSON before the ingestion harness executes", async () => {
+    const { server, harness } = await createTestServer();
+    const oversizedPayload = JSON.stringify({
+      observedDate: "2026-06-04",
+      originalFilename: "oversized.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 2_097_152,
+      documentType: "PDF",
+      base64Data: "A".repeat(maxDocumentUploadRequestBytes)
+    });
+
+    expect(Buffer.byteLength(oversizedPayload)).toBeGreaterThan(
+      maxDocumentUploadRequestBytes
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      headers: { "content-type": "application/json" },
+      payload: oversizedPayload
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(harness.execute).not.toHaveBeenCalled();
+    expect(response.body).not.toContain("AAAA");
+    expect(response.body).not.toContain("stack");
+    expect(response.body).not.toContain("Prisma");
+    expect(response.body).not.toContain("C:\\");
+    await server.close();
+  });
+
+  it("allows a bounded maximum base64 body to reach upload validation", async () => {
+    const { server, harness } = await createTestServer();
+    const payload = {
+      observedDate: "2026-06-04",
+      originalFilename: "maximum.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 2_097_152,
+      documentType: "PDF",
+      base64Data: "A".repeat(maxPdfBase64Length)
+    };
+
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(
+      maxDocumentUploadRequestBytes
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(harness.execute).toHaveBeenCalledOnce();
+    await server.close();
+  });
+
   it("resets the demo through the service", async () => {
     const { server, service } = await createTestServer();
     const response = await server.inject({
@@ -356,6 +529,119 @@ describe("review routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(service.resetDemo).toHaveBeenCalledOnce();
+    await server.close();
+  });
+
+  it("invalidates a paused upload, preserves reset state, and rejects rapid duplicates", async () => {
+    const server = Fastify({ logger: false });
+    const clientOperations = new ClientOperationCoordinator();
+    const canonicalRecords = ["source-legacy", "source-annual", "source-note"];
+    const records = [...canonicalRecords];
+    let releaseUpload: () => void = () => undefined;
+    let uploadReachedPersistence: () => void = () => undefined;
+    let shouldPause = true;
+    const reachedPersistence = new Promise<void>((resolve) => {
+      uploadReachedPersistence = resolve;
+    });
+    let releasePromise = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+
+    const service = {
+      buildReviewResponse: vi.fn(async () => review),
+      resetDemo: vi.fn(async () => {
+        records.splice(0, records.length, ...canonicalRecords);
+        return review;
+      })
+    } satisfies ReviewRouteService;
+    const harness = {
+      execute: vi.fn<ReviewRouteHarness["execute"]>(
+        async (_skillName, input, _outputSchema, clientId) => {
+          const request = input as {
+            originalFilename: string;
+          };
+          if (shouldPause) {
+            uploadReachedPersistence();
+            await releasePromise;
+          }
+
+          return clientOperations.commitUpload(clientId, async () => {
+            records.push(`source-upload-${request.originalFilename}`);
+            return {
+              ok: true,
+              output: {
+                ...uploadResponse,
+                sourceRecord: {
+                  ...uploadResponse.sourceRecord,
+                  id: `source-upload-${request.originalFilename}`,
+                  title: `Uploaded: ${request.originalFilename}`
+                },
+                safeFilename: request.originalFilename
+              },
+              metadata: {
+                skillName: "ingest-client-document",
+                skillVersion: "2",
+                status: "SUCCEEDED",
+                events: []
+              }
+            };
+          });
+        }
+      )
+    } satisfies ReviewRouteHarness;
+
+    await registerReviewRoutes(server, {
+      reviewService: service,
+      harness,
+      clientOperations
+    });
+    const uploadPayload = {
+      observedDate: "2026-06-04",
+      originalFilename: "old.txt",
+      mediaType: "text/plain",
+      sizeBytes: 10,
+      documentType: "TEXT",
+      text: "Valid text"
+    };
+
+    const oldUpload = server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload: uploadPayload
+    });
+    await reachedPersistence;
+
+    const duplicate = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload: { ...uploadPayload, originalFilename: "duplicate.txt" }
+    });
+    expect(duplicate.statusCode).toBe(409);
+
+    const reset = await server.inject({
+      method: "POST",
+      url: "/api/demo/reset"
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(records).toEqual(canonicalRecords);
+
+    releaseUpload();
+    const oldUploadResponse = await oldUpload;
+    expect(oldUploadResponse.statusCode).toBe(409);
+    expect(records).toEqual(canonicalRecords);
+
+    shouldPause = false;
+    releasePromise = Promise.resolve();
+    const newUpload = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/source-records/upload",
+      payload: { ...uploadPayload, originalFilename: "new.txt" }
+    });
+    expect(newUpload.statusCode).toBe(200);
+    expect(records).toEqual([
+      ...canonicalRecords,
+      "source-upload-new.txt"
+    ]);
     await server.close();
   });
 });

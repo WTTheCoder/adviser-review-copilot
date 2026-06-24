@@ -157,9 +157,12 @@ export const prepareAnnualReviewSkill: SkillDefinition<
             clientId,
             clientDisplayName: loadedContext.client.name,
             sourceRecordId: meetingNote.id,
-            sourceType: "ADVISER_MEETING_NOTE",
+            sourceType:
+              meetingNote.upload?.mediaType === "application/pdf"
+                ? "UPLOADED_PDF"
+                : "ADVISER_MEETING_NOTE",
             observedDate: meetingNote.observedAt.slice(0, 10),
-            meetingNoteText: meetingNote.content.join("\n"),
+            meetingNoteText: meetingNote.content.join("\n").slice(0, 4000),
             supportedFields
           },
           prepareAnnualReviewSkill.allowedTools,

@@ -55,16 +55,33 @@ export const executionTraceMetadataSchema = executionMetadataSchema
 
 export const confidenceSchema = z.enum(["High", "Medium", "Low"]);
 
-export const allowedUploadExtensions = [".txt", ".md"] as const;
-export const allowedUploadMediaTypes = [
+export const allowedTextUploadExtensions = [".txt", ".md"] as const;
+export const allowedPdfUploadExtensions = [".pdf"] as const;
+export const allowedUploadExtensions = [
+  ...allowedTextUploadExtensions,
+  ...allowedPdfUploadExtensions
+] as const;
+export const allowedTextUploadMediaTypes = [
   "text/plain",
   "text/markdown",
   "text/x-markdown",
   "application/octet-stream"
 ] as const;
+export const allowedPdfUploadMediaTypes = ["application/pdf"] as const;
+export const allowedUploadMediaTypes = [
+  ...allowedTextUploadMediaTypes,
+  ...allowedPdfUploadMediaTypes
+] as const;
 export const maxUploadBytes = 256 * 1024;
 export const maxUploadCharacters = 256 * 1024;
 export const maxUploadFilenameLength = 120;
+export const maxPdfUploadBytes = 2 * 1024 * 1024;
+export const maxPdfPages = 25;
+export const maxPdfExtractedCharacters = 250_000;
+export const maxPdfExtractedBytes = 512 * 1024;
+export const maxPdfBase64Length = Math.ceil(maxPdfUploadBytes / 3) * 4;
+export const maxDocumentUploadRequestBytes =
+  maxPdfBase64Length + 16 * 1024;
 
 export const calendarDateStringSchema = z
   .string()
@@ -83,28 +100,98 @@ export const calendarDateStringSchema = z
     );
   }, "Must be a valid calendar date");
 
-export const documentUploadRequestSchema = z
+const documentUploadBaseSchema = z
   .object({
     clientId: z.string().min(1).max(80),
     observedDate: calendarDateStringSchema,
     sourceType: z.literal("ADVISER_MEETING_NOTE"),
     originalFilename: z.string().min(1).max(260),
     mediaType: z.string().min(1).max(120),
-    sizeBytes: z.number().int().nonnegative(),
+    sizeBytes: z.number().int().nonnegative()
+  })
+  .strict();
+
+export const textDocumentUploadRequestSchema = documentUploadBaseSchema
+  .extend({
+    documentType: z.literal("TEXT"),
     text: z.string().max(maxUploadCharacters)
   })
   .strict();
 
+export const pdfDocumentUploadRequestSchema = documentUploadBaseSchema
+  .extend({
+    documentType: z.literal("PDF"),
+    base64Data: z.string().min(1).max(maxPdfBase64Length)
+  })
+  .strict();
+
+export const documentUploadRequestSchema = z.discriminatedUnion(
+  "documentType",
+  [textDocumentUploadRequestSchema, pdfDocumentUploadRequestSchema]
+);
+
 export const uploadSourceMetadataSchema = z
   .object({
     origin: z.literal("UPLOAD"),
+    documentType: z.enum(["TEXT", "PDF"]).optional(),
     safeFilename: z.string().min(1).max(maxUploadFilenameLength),
     mediaType: z.enum(allowedUploadMediaTypes),
-    characterCount: z.number().int().positive().max(maxUploadCharacters),
-    byteCount: z.number().int().positive().max(maxUploadBytes),
+    characterCount: z
+      .number()
+      .int()
+      .positive()
+      .max(maxUploadCharacters),
+    byteCount: z
+      .number()
+      .int()
+      .positive()
+      .max(maxPdfExtractedBytes),
+    originalByteCount: z
+      .number()
+      .int()
+      .positive()
+      .max(maxPdfUploadBytes)
+      .optional(),
+    pageCount: z.number().int().positive().max(maxPdfPages).optional(),
+    parser: z
+      .object({
+        name: z.literal("unpdf"),
+        version: z.string().min(1).max(40)
+      })
+      .strict()
+      .optional(),
     uploadedAt: z.string()
   })
-  .strict();
+  .strict()
+  .superRefine((metadata, context) => {
+    const isPdf =
+      metadata.documentType === "PDF" ||
+      metadata.mediaType === "application/pdf";
+
+    if (
+      isPdf &&
+      (metadata.documentType !== "PDF" ||
+        metadata.mediaType !== "application/pdf" ||
+        metadata.originalByteCount === undefined ||
+        metadata.pageCount === undefined ||
+        metadata.parser === undefined)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "PDF upload metadata is incomplete."
+      });
+    }
+
+    if (
+      metadata.documentType === "TEXT" &&
+      metadata.mediaType === "application/pdf"
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Text upload metadata cannot use the PDF media type."
+      });
+    }
+  });
 
 export const documentUploadResultSchema = z
   .object({
@@ -119,7 +206,14 @@ export const documentUploadResultSchema = z
     }),
     safeFilename: z.string(),
     characterCount: z.number().int().positive(),
-    byteCount: z.number().int().positive().max(maxUploadBytes),
+    byteCount: z.number().int().positive().max(maxPdfExtractedBytes),
+    originalByteCount: z
+      .number()
+      .int()
+      .positive()
+      .max(maxPdfUploadBytes)
+      .optional(),
+    pageCount: z.number().int().positive().max(maxPdfPages).optional(),
     ingestionStatus: z.literal("validated")
   })
   .strict();
@@ -127,6 +221,26 @@ export const documentUploadResultSchema = z
 export const documentUploadResponseSchema = documentUploadResultSchema
   .extend({
     executionMetadata: executionTraceMetadataSchema
+  })
+  .strict();
+
+export const pdfUploadErrorCodeSchema = z.enum([
+  "PDF_INVALID_SIGNATURE",
+  "PDF_TOO_LARGE",
+  "PDF_PARSE_FAILED",
+  "PDF_ENCRYPTED",
+  "PDF_PASSWORD_PROTECTED",
+  "PDF_PARSE_TIMEOUT",
+  "PDF_PAGE_LIMIT_EXCEEDED",
+  "PDF_TEXT_NOT_AVAILABLE",
+  "PDF_EXTRACTED_TEXT_TOO_LARGE",
+  "PDF_UNSUPPORTED_FEATURE"
+]);
+
+export const documentUploadErrorResponseSchema = z
+  .object({
+    code: pdfUploadErrorCodeSchema,
+    message: z.string().min(1).max(240)
   })
   .strict();
 
@@ -187,6 +301,7 @@ export const adviserActionSchema = z.object({
     .object({
       decision: decisionTypeSchema,
       note: z.string().nullable(),
+      candidateValue: z.string().nullable().optional(),
       createdAt: z.string()
     })
     .nullable()
@@ -238,3 +353,4 @@ export type ExtractionMetadata = z.infer<typeof extractionMetadataSchema>;
 export type DocumentUploadRequest = z.infer<typeof documentUploadRequestSchema>;
 export type DocumentUploadResult = z.infer<typeof documentUploadResultSchema>;
 export type DocumentUploadResponse = z.infer<typeof documentUploadResponseSchema>;
+export type PdfUploadErrorCode = z.infer<typeof pdfUploadErrorCodeSchema>;
