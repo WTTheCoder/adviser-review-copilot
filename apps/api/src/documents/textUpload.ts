@@ -1,13 +1,13 @@
 import {
   allowedUploadExtensions,
-  allowedUploadMediaTypes,
+  allowedTextUploadExtensions,
+  allowedTextUploadMediaTypes,
   maxUploadBytes,
   maxUploadCharacters,
   maxUploadFilenameLength,
   type DocumentUploadRequest
 } from "@client-review-prep/shared";
 import { Buffer } from "node:buffer";
-import { z } from "zod";
 
 export class DocumentUploadError extends Error {
   constructor(readonly code: string) {
@@ -24,7 +24,10 @@ const hasControlCharacter = (value: string) =>
 const basename = (filename: string) =>
   filename.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "";
 
-export const sanitizeUploadFilename = (filename: string) => {
+export const sanitizeUploadFilename = (
+  filename: string,
+  allowedExtensions: readonly string[] = allowedUploadExtensions
+) => {
   if (hasControlCharacter(filename)) {
     throw new DocumentUploadError("UNSAFE_FILENAME");
   }
@@ -45,7 +48,7 @@ export const sanitizeUploadFilename = (filename: string) => {
   }
 
   const lower = safeFilename.toLowerCase();
-  const extension = allowedUploadExtensions.find((candidate) =>
+  const extension = allowedExtensions.find((candidate) =>
     lower.endsWith(candidate)
   );
 
@@ -56,18 +59,25 @@ export const sanitizeUploadFilename = (filename: string) => {
   return { safeFilename, extension };
 };
 
-export const validateUploadMediaType = (mediaType: string) => {
-  const normalized = mediaType.toLowerCase().split(";")[0]?.trim() ?? "";
+export const normalizeUploadMediaType = (mediaType: string) =>
+  mediaType.toLowerCase().split(";")[0]?.trim() ?? "";
 
-  if (!z.enum(allowedUploadMediaTypes).safeParse(normalized).success) {
-    throw new DocumentUploadError("UNSUPPORTED_MEDIA_TYPE");
+export const validateUploadMediaType = <TMediaTypes extends readonly string[]>(
+  mediaType: string,
+  allowedMediaTypes: TMediaTypes
+): TMediaTypes[number] => {
+  const normalized = normalizeUploadMediaType(mediaType);
+  for (const candidate of allowedMediaTypes) {
+    if (candidate === normalized) {
+      return candidate;
+    }
   }
 
-  return normalized as (typeof allowedUploadMediaTypes)[number];
+  throw new DocumentUploadError("UNSUPPORTED_MEDIA_TYPE");
 };
 
 export const validateUploadText = (
-  input: Pick<DocumentUploadRequest, "text" | "sizeBytes">
+  input: { text: string; sizeBytes: number }
 ) => {
   const normalizedText = input.text.replace(/\r\n?/g, "\n");
   const byteCount = Buffer.byteLength(normalizedText, "utf8");
@@ -95,9 +105,17 @@ export const validateUploadText = (
   };
 };
 
-export const validateTextUpload = (input: DocumentUploadRequest) => {
-  const filename = sanitizeUploadFilename(input.originalFilename);
-  const mediaType = validateUploadMediaType(input.mediaType);
+export const validateTextUpload = (
+  input: Extract<DocumentUploadRequest, { documentType: "TEXT" }>
+) => {
+  const filename = sanitizeUploadFilename(
+    input.originalFilename,
+    allowedTextUploadExtensions
+  );
+  const mediaType = validateUploadMediaType(
+    input.mediaType,
+    allowedTextUploadMediaTypes
+  );
   const content = validateUploadText(input);
 
   return {

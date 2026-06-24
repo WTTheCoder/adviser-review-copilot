@@ -25,11 +25,22 @@ export const getEvidenceExplanation = (
 
   if (fact.field === "Risk profile") {
     if (latestDecision === "APPROVE") {
+      const approvedCandidate =
+        adviserAction?.latestDecision?.candidateValue ?? fact.currentValue;
+      if (
+        !fact.previousValue ||
+        approvedCandidate !== fact.currentValue ||
+        fact.previousValue === fact.currentValue
+      ) {
+        return fact.memoryExplanation;
+      }
       return `The adviser approved ${fact.currentValue}. It became the current official risk profile, and ${fact.previousValue ?? "the former official value"} is retained as previous history.`;
     }
 
     if (latestDecision === "KEEP_CURRENT") {
-      return `The adviser retained ${fact.currentValue} as the official risk profile. The candidate was not promoted.`;
+      const declinedCandidate =
+        adviserAction?.latestDecision?.candidateValue ?? "The candidate";
+      return `The adviser retained ${fact.currentValue} as the official risk profile. ${declinedCandidate} was not promoted.`;
     }
 
     if (
@@ -86,6 +97,18 @@ export const getAdviserActionPresentation = (
     const candidateValue = fact?.candidateValue ?? "the candidate risk profile";
 
     if (latestDecision === "APPROVE") {
+      const approvedCandidate =
+        item.latestDecision?.candidateValue ?? currentValue;
+      if (
+        !fact?.previousValue ||
+        approvedCandidate !== currentValue ||
+        previousValue === currentValue
+      ) {
+        return {
+          title: "Risk profile decision recorded",
+          detail: "The persisted fact state does not contain a distinct approved candidate."
+        };
+      }
       return {
         title: `${currentValue} risk profile approved`,
         detail: `${currentValue} is now the official risk profile, and ${previousValue} is retained as previous history.`
@@ -93,9 +116,22 @@ export const getAdviserActionPresentation = (
     }
 
     if (latestDecision === "KEEP_CURRENT") {
+      const declinedCandidate =
+        item.latestDecision?.candidateValue ?? "The candidate";
       return {
-        title: "Current risk profile retained",
-        detail: `${currentValue} remains the official risk profile, and the candidate was not promoted.`
+        title: `${currentValue} risk profile retained`,
+        detail: `${currentValue} remains the official risk profile, and ${declinedCandidate} was not promoted.`
+      };
+    }
+
+    if (
+      !fact?.candidateValue ||
+      fact.lifecycleStatus !== "REQUIRES_ADVISER_APPROVAL" ||
+      fact.candidateValue === fact.officialValue
+    ) {
+      return {
+        title: item.title,
+        detail: item.detail
       };
     }
 

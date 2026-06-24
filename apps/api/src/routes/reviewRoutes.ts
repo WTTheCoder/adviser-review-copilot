@@ -1,8 +1,10 @@
 import {
   adviserDecisionPayloadSchema,
   documentUploadResultSchema,
+  documentUploadErrorResponseSchema,
   documentUploadRequestSchema,
   documentUploadResponseSchema,
+  maxDocumentUploadRequestBytes,
   type ReviewResponse,
   reviewResponseSchema
 } from "@client-review-prep/shared";
@@ -10,7 +12,27 @@ import type { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ExecutionResult } from "../agent/harness/executionResult.js";
 import { DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
+import {
+  UploadAlreadyInProgressError,
+  UploadInvalidatedByResetError
+} from "../services/clientOperationCoordinator.js";
+import type { ClientOperationCoordinator } from "../services/clientOperationCoordinator.js";
 import type { createReviewService } from "../services/reviewService.js";
+
+const pdfUploadErrorCodes = new Set([
+  "PDF_INVALID_SIGNATURE",
+  "PDF_TOO_LARGE",
+  "PDF_PARSE_FAILED",
+  "PDF_ENCRYPTED",
+  "PDF_PASSWORD_PROTECTED",
+  "PDF_PARSE_TIMEOUT",
+  "PDF_PAGE_LIMIT_EXCEEDED",
+  "PDF_TEXT_NOT_AVAILABLE",
+  "PDF_EXTRACTED_TEXT_TOO_LARGE",
+  "PDF_UNSUPPORTED_FEATURE"
+]);
+
+export const uploadRequestBodyLimit = maxDocumentUploadRequestBytes;
 
 export type ReviewRouteService = Pick<
   ReturnType<typeof createReviewService>,
@@ -34,6 +56,7 @@ export type ReviewRouteHarness = {
 export type ReviewRouteDependencies = {
   reviewService: ReviewRouteService;
   harness: ReviewRouteHarness;
+  clientOperations: ClientOperationCoordinator;
 };
 
 const withExecutionMetadata = (
@@ -50,7 +73,7 @@ const withExecutionMetadata = (
 
 export const registerReviewRoutes = async (
   server: FastifyInstance,
-  { reviewService, harness }: ReviewRouteDependencies
+  { reviewService, harness, clientOperations }: ReviewRouteDependencies
 ) => {
   server.get("/api/clients/:clientId/review", async (request, reply) => {
     const { clientId } = request.params as { clientId: string };
@@ -121,6 +144,7 @@ export const registerReviewRoutes = async (
 
   server.post(
     "/api/clients/:clientId/source-records/upload",
+    { bodyLimit: uploadRequestBodyLimit },
     async (request, reply) => {
       const { clientId } = request.params as { clientId: string };
       const payloadResult = documentUploadRequestSchema.safeParse({
@@ -135,15 +159,41 @@ export const registerReviewRoutes = async (
         return reply.status(400).send({ message: "Invalid upload request." });
       }
 
-      const result = await harness.execute(
-        "ingest-client-document",
-        payloadResult.data,
-        documentUploadResultSchema,
-        clientId
-      );
+      let result: Awaited<ReturnType<ReviewRouteHarness["execute"]>>;
+      try {
+        result = await clientOperations.runUpload(clientId, () =>
+          harness.execute(
+            "ingest-client-document",
+            payloadResult.data,
+            documentUploadResultSchema,
+            clientId
+          )
+        );
+      } catch (error) {
+        if (error instanceof UploadAlreadyInProgressError) {
+          return reply.status(409).send({
+            message: "An upload is already in progress for this client."
+          });
+        }
+        if (error instanceof UploadInvalidatedByResetError) {
+          return reply.status(409).send({
+            message: "The upload was cancelled because the demo was reset."
+          });
+        }
+        throw error;
+      }
 
       if (!result.ok) {
         request.log.warn({ code: result.error.code }, "Document ingestion failed");
+        if (pdfUploadErrorCodes.has(result.error.code)) {
+          return reply.status(400).send({
+            ...documentUploadErrorResponseSchema.parse({
+              code: result.error.code,
+              message: result.error.message
+            })
+          });
+        }
+
         return reply.status(400).send({
           message: "The document could not be uploaded. Check the file type, size, date, and content."
         });
@@ -158,7 +208,9 @@ export const registerReviewRoutes = async (
 
   server.post("/api/demo/reset", async (request, reply) => {
     try {
-      const review = await reviewService.resetDemo();
+      const review = await clientOperations.runReset(DEMO_CLIENT_ID, () =>
+        reviewService.resetDemo()
+      );
       return reviewResponseSchema.parse(review);
     } catch (error) {
       request.log.error(error);

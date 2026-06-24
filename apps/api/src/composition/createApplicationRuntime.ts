@@ -4,13 +4,15 @@ import { createCandidateFactExtractor } from "../ai/providers/createCandidateFac
 import { prisma } from "../db/prisma.js";
 import { createReviewService } from "../services/reviewService.js";
 import type { ReviewRouteDependencies } from "../routes/reviewRoutes.js";
+import { ClientOperationCoordinator } from "../services/clientOperationCoordinator.js";
 
 export type ApplicationRuntime = {
   reviewRoutes: ReviewRouteDependencies;
 };
 
 export const createApplicationRuntime = (): ApplicationRuntime => {
-  const reviewService = createReviewService(prisma);
+  const clientOperations = new ClientOperationCoordinator();
+  const reviewService = createReviewService(prisma, clientOperations);
   const aiConfig = loadAiConfig();
   const candidateFactExtractor = createCandidateFactExtractor(aiConfig);
   const { harness } = createAgentRuntime(
@@ -22,7 +24,8 @@ export const createApplicationRuntime = (): ApplicationRuntime => {
   return {
     reviewRoutes: {
       reviewService,
-      harness
+      harness,
+      clientOperations
     }
   };
 };

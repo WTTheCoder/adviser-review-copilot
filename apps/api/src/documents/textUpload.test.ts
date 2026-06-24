@@ -14,6 +14,7 @@ const validUpload = {
   originalFilename: "meeting-note.txt",
   mediaType: "text/plain",
   sizeBytes: 42,
+  documentType: "TEXT" as const,
   text: "Alex may have moved to Fremantle."
 };
 
@@ -42,11 +43,23 @@ describe("text upload validation", () => {
     expect(() => sanitizeUploadFilename("../note.txt")).toThrow();
     expect(() => sanitizeUploadFilename("bad\u0000name.txt")).toThrow();
     expect(() => sanitizeUploadFilename(`${"a".repeat(121)}.txt`)).toThrow();
-    expect(() => sanitizeUploadFilename("statement.pdf")).toThrow();
+    expect(() =>
+      validateTextUpload({
+        ...validUpload,
+        originalFilename: "statement.pdf"
+      })
+    ).toThrow();
   });
 
   it("rejects unsupported media types", () => {
-    expect(() => validateUploadMediaType("application/pdf")).toThrow();
+    expect(() =>
+      validateUploadMediaType("application/pdf", [
+        "text/plain",
+        "text/markdown",
+        "text/x-markdown",
+        "application/octet-stream"
+      ])
+    ).toThrow();
   });
 
   it("rejects oversized, empty, whitespace-only, and invalid UTF-8 text", () => {

@@ -68,8 +68,12 @@ describe("document upload schemas", () => {
       originalFilename: "alex-note.md",
       mediaType: "text/markdown",
       sizeBytes: 42,
+      documentType: "TEXT",
       text: "Alex may have moved to Fremantle."
     });
+    if (request.documentType !== "TEXT") {
+      throw new Error("Expected a text upload request.");
+    }
     const result = documentUploadResultSchema.parse({
       status: "stored",
       sourceRecord: {
@@ -80,6 +84,7 @@ describe("document upload schemas", () => {
         observedDate: request.observedDate,
         upload: {
           origin: "UPLOAD",
+          documentType: "TEXT",
           safeFilename: "alex-note.md",
           mediaType: request.mediaType,
           characterCount: request.text.length,
@@ -123,6 +128,51 @@ describe("document upload schemas", () => {
     );
   });
 
+  it("accepts the PDF upload request and metadata contracts", () => {
+    const request = documentUploadRequestSchema.parse({
+      clientId: "demo-alex-taylor",
+      observedDate: "2026-06-04",
+      sourceType: "ADVISER_MEETING_NOTE",
+      originalFilename: "alex-review.PDF",
+      mediaType: "application/pdf",
+      sizeBytes: 5,
+      documentType: "PDF",
+      base64Data: "JVBERi0="
+    });
+
+    expect(request.documentType).toBe("PDF");
+    expect(
+      documentUploadResultSchema.safeParse({
+        status: "stored",
+        sourceRecord: {
+          id: "source-upload-pdf",
+          clientId: request.clientId,
+          type: "ADVISER_MEETING_NOTE",
+          title: "Uploaded: alex-review.PDF",
+          observedDate: request.observedDate,
+          upload: {
+            origin: "UPLOAD",
+            documentType: "PDF",
+            safeFilename: "alex-review.PDF",
+            mediaType: "application/pdf",
+            characterCount: 80,
+            byteCount: 80,
+            originalByteCount: 512,
+            pageCount: 2,
+            parser: { name: "unpdf", version: "1.6.2" },
+            uploadedAt: "2026-06-23T00:00:00.000Z"
+          }
+        },
+        safeFilename: "alex-review.PDF",
+        characterCount: 80,
+        byteCount: 80,
+        originalByteCount: 512,
+        pageCount: 2,
+        ingestionStatus: "validated"
+      }).success
+    ).toBe(true);
+  });
+
   it("rejects invalid dates and unexpected fields while treating sizeBytes as non-authoritative metadata", () => {
     expect(
       documentUploadRequestSchema.safeParse({
@@ -132,6 +182,7 @@ describe("document upload schemas", () => {
         originalFilename: "alex-note.txt",
         mediaType: "text/plain",
         sizeBytes: 12,
+        documentType: "TEXT",
         text: "Text",
         unexpected: true
       }).success
@@ -145,6 +196,7 @@ describe("document upload schemas", () => {
         originalFilename: "alex-note.txt",
         mediaType: "text/plain",
         sizeBytes: maxUploadBytes + 1,
+        documentType: "TEXT",
         text: "Text"
       }).success
     ).toBe(true);

@@ -19,7 +19,8 @@
     "@fastify/cors": "^10.0.2",
     "@prisma/client": "^6.19.3",
     "fastify": "^5.2.1",
-    "openai": "^6.44.0"
+    "openai": "^6.44.0",
+    "unpdf": "1.6.2"
   },
   "devDependencies": {
     "prisma": "^6.19.3"

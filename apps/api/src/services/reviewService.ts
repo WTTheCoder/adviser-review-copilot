@@ -4,6 +4,7 @@ import {
   SourceRecordType,
   WorkflowRunStatus
 } from "@prisma/client";
+import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
 import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
 import {
   uploadSourceMetadataSchema,
@@ -134,6 +135,19 @@ const fieldProjectionTargets = {
 const clearCandidateExplanation = (field: string) =>
   `No ${field.toLowerCase()} candidate was extracted in the latest preparation run. The official value remains unchanged.`;
 
+const decisionCandidateMarker = "\nCandidate value at decision: ";
+
+const candidateValueFromDecisionNote = (note: string | null) => {
+  if (!note) {
+    return null;
+  }
+
+  const markerIndex = note.lastIndexOf(decisionCandidateMarker);
+  return markerIndex >= 0
+    ? note.slice(markerIndex + decisionCandidateMarker.length).trim() || null
+    : null;
+};
+
 type LegacyAdapter = ReturnType<typeof createLegacyCrmAdapter>;
 
 export type FactForReview = {
@@ -150,6 +164,11 @@ export type FactForReview = {
   sourceRecord: {
     title: string;
   };
+  adviserDecisions: Array<{
+    decisionType: DecisionType;
+    note: string | null;
+    createdAt: Date;
+  }>;
 };
 
 export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
@@ -186,6 +205,10 @@ export const buildMeaningfulChanges = (facts: readonly FactForReview[]) => [
 export const countUnresolvedReviewItems = (facts: readonly FactForReview[]) =>
   facts.filter((fact) => unresolvedReviewStatuses.has(fact.lifecycleStatus)).length;
 
+export const shouldIncludeAdviserAction = (fact: FactForReview) =>
+  ["fact-address", "fact-risk-profile"].includes(fact.id) &&
+  (fact.candidateValue !== null || fact.adviserDecisions[0] !== undefined);
+
 export const buildSummaryMetrics = (
   facts: readonly FactForReview[],
   changes: readonly string[]
@@ -195,7 +218,10 @@ export const buildSummaryMetrics = (
   { value: String(countUnresolvedReviewItems(facts)), label: "Items needing confirmation" }
 ];
 
-export const createReviewService = (client: PrismaClient) => {
+export const createReviewService = (
+  client: PrismaClient,
+  clientOperations = new ClientOperationCoordinator()
+) => {
   const legacyAdapter = createLegacyCrmAdapter(client);
 
   const buildReviewResponse = async (
@@ -233,9 +259,7 @@ export const createReviewService = (client: PrismaClient) => {
     const factDtos: ClientFactDto[] = facts.map(mapFactToDto);
     const meaningfulChangeItems = buildMeaningfulChanges(facts);
 
-    const actionFacts = facts.filter((fact) =>
-      ["fact-address", "fact-risk-profile"].includes(fact.id)
-    );
+    const actionFacts = facts.filter(shouldIncludeAdviserAction);
 
     return {
       client: {
@@ -273,6 +297,9 @@ export const createReviewService = (client: PrismaClient) => {
             ? {
                 decision: latestDecision.decisionType,
                 note: latestDecision.note,
+                candidateValue: candidateValueFromDecisionNote(
+                  latestDecision.note
+                ),
                 createdAt: latestDecision.createdAt.toISOString()
               }
             : null
@@ -378,14 +405,15 @@ export const createReviewService = (client: PrismaClient) => {
       throw new Error("FACT_NOT_FOUND");
     }
 
-    if (!isDecisionAllowedForFact(fact.id, payload.decision)) {
+    if (!isDecisionAllowedForFact(fact, payload.decision)) {
       throw new Error("INVALID_DECISION_FOR_FACT");
     }
 
     await client.$transaction(async (transaction) => {
-      const note =
+      const note = `${
         payload.note ??
-        `Local demo decision: ${payload.decision}. No production CRM was updated.`;
+        `Local demo decision: ${payload.decision}. No production CRM was updated.`
+      }${decisionCandidateMarker}${fact.candidateValue}`;
 
       await transaction.adviserDecision.create({
         data: {
@@ -407,7 +435,8 @@ export const createReviewService = (client: PrismaClient) => {
     return buildReviewResponse(clientId);
   };
 
-  const createUploadedSourceRecord = async (input: {
+  const persistUploadedSourceRecord = async (input: {
+    documentType: "TEXT" | "PDF";
     clientId: string;
     observedDate: string;
     sourceType: "ADVISER_MEETING_NOTE";
@@ -416,6 +445,13 @@ export const createReviewService = (client: PrismaClient) => {
     text: string;
     characterCount: number;
     byteCount: number;
+    originalByteCount: number;
+    pageCount?: number;
+    parser?: {
+      name: "unpdf";
+      version: string;
+    };
+    warnings?: string[];
   }): Promise<DocumentUploadResult> => {
     const clientRecord = await client.client.findUnique({
       where: { id: input.clientId },
@@ -430,10 +466,14 @@ export const createReviewService = (client: PrismaClient) => {
     const sourceRecordId = `source-upload-${input.clientId}-${uploadedAt.getTime()}`;
     const upload = uploadSourceMetadataSchema.parse({
       origin: "UPLOAD" as const,
+      documentType: input.documentType,
       safeFilename: input.safeFilename,
       mediaType: input.mediaType,
       characterCount: input.characterCount,
       byteCount: input.byteCount,
+      originalByteCount: input.originalByteCount,
+      ...(input.pageCount ? { pageCount: input.pageCount } : {}),
+      ...(input.parser ? { parser: input.parser } : {}),
       uploadedAt: uploadedAt.toISOString()
     });
     const lines = input.text.split("\n");
@@ -445,7 +485,10 @@ export const createReviewService = (client: PrismaClient) => {
         type: SourceRecordType.ADVISER_MEETING_NOTE,
         title: `Uploaded: ${input.safeFilename}`,
         observedAt: toUtcDate(input.observedDate),
-        summary: `Uploaded text document (${input.characterCount} characters).`,
+        summary:
+          input.documentType === "PDF"
+            ? `Uploaded text-based PDF (${input.pageCount ?? 0} pages, ${input.characterCount} extracted characters).`
+            : `Uploaded text document (${input.characterCount} characters).`,
         content: {
           lines,
           upload
@@ -467,9 +510,18 @@ export const createReviewService = (client: PrismaClient) => {
       safeFilename: input.safeFilename,
       characterCount: input.characterCount,
       byteCount: input.byteCount,
+      originalByteCount: input.originalByteCount,
+      ...(input.pageCount ? { pageCount: input.pageCount } : {}),
       ingestionStatus: "validated"
     };
   };
+
+  const createUploadedSourceRecord = async (
+    input: Parameters<typeof persistUploadedSourceRecord>[0]
+  ) =>
+    clientOperations.commitUpload(input.clientId, () =>
+      persistUploadedSourceRecord(input)
+    );
 
   const applyExtractedCandidateProjection = async (
     clientId: string,

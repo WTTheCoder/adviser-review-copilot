@@ -38,9 +38,35 @@ export const applyDecisionToFact = (
   }
 };
 
-export const isDecisionAllowedForFact = (factId: string, decision: DecisionType) =>
-  (factId === "fact-address" &&
-    (decision === DecisionType.CONFIRM ||
-      decision === DecisionType.LEAVE_UNVERIFIED)) ||
-  (factId === "fact-risk-profile" &&
-    (decision === DecisionType.APPROVE || decision === DecisionType.KEEP_CURRENT));
+const hasDistinctCandidate = (fact: DecisionFactState) =>
+  Boolean(
+    fact.candidateValue?.trim() &&
+      fact.candidateValue.trim() !== fact.officialValue.trim()
+  );
+
+export const isDecisionAllowedForFact = (
+  fact: DecisionFactState,
+  decision: DecisionType
+) => {
+  if (!hasDistinctCandidate(fact)) {
+    return false;
+  }
+
+  if (fact.id === "fact-address") {
+    return (
+      fact.lifecycleStatus === LifecycleStatus.NEEDS_CONFIRMATION &&
+      (decision === DecisionType.CONFIRM ||
+        decision === DecisionType.LEAVE_UNVERIFIED)
+    );
+  }
+
+  if (fact.id === "fact-risk-profile") {
+    return (
+      fact.lifecycleStatus === LifecycleStatus.REQUIRES_ADVISER_APPROVAL &&
+      (decision === DecisionType.APPROVE ||
+        decision === DecisionType.KEEP_CURRENT)
+    );
+  }
+
+  return false;
+};

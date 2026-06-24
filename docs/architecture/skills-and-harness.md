@@ -43,10 +43,14 @@ The React app consumes normal API responses and optional execution metadata. It 
 
 `POST /api/clients/:clientId/source-records/upload` runs `ingest-client-document`:
 
-1. Validate the fixed route payload against the shared upload schema.
-2. Validate filename, extension, media type, size, date, UTF-8 text, and non-empty content through `document.validateTextUpload`.
-3. Persist one uploaded adviser meeting-note source record through `review.createUploadedSourceRecord`.
-4. Return restrained upload metadata without echoing full document text in the execution trace.
+1. Reject JSON bodies over the application-owned Fastify route limit before decoding or skill execution.
+2. Validate the fixed route payload against the shared upload schema.
+3. Discriminate TXT/Markdown from PDF using the application-owned request schema.
+4. Validate TXT/Markdown through `document.validateTextUpload`, or validate PDF metadata, binary size, and signature through `document.validatePdfUpload`.
+5. Extract bounded embedded PDF text through `document.extractPdfText`. OCR and filesystem access are not available.
+6. Recheck the upload's per-client generation inside the serialized persistence boundary shared with reset.
+7. Persist one normalized adviser meeting-note source record through `review.createUploadedSourceRecord`.
+8. Return restrained upload metadata without echoing document text or PDF bytes in the execution trace.
 
 The upload route does not expose arbitrary skill names, arbitrary tool names, server filesystem reads, or model-controlled file access.
 
@@ -68,7 +72,9 @@ Every tool declares:
 
 The harness rejects unknown skills, invalid skill inputs, invalid skill outputs, invalid tool inputs, invalid tool outputs, unknown tools, and tools outside the current skill allowlist.
 
-Phase 6A document ingestion adds only a fixed text-upload path. Uploaded content is untrusted data and is stored as validated text on an existing `SourceRecord` for the local prototype. The browser-supplied filename is display metadata only; it is never used as a filesystem path.
+Phase 6B1 document ingestion keeps one fixed route and one fixed skill. PDF parsing is isolated behind an application-owned wrapper around `unpdf`; tools receive in-memory data only, PDF.js string evaluation is disabled, and normalized extracted text is persisted only after all validation succeeds. Password/encryption classification comes from parser behavior, not lexical scans of arbitrary bytes. A 15-second application timeout bounds request waiting but does not provide CPU or memory isolation. Raw PDF bytes are never stored. The browser-supplied filename is display metadata only and is never used as a filesystem path.
+
+Upload requests capture an in-memory per-client operation generation. Reset increments that generation inside the same serialized critical section used immediately before source-record persistence. An older upload therefore either commits before reset and is removed by reseeding, or observes the changed generation and cannot commit afterward. The browser also uses a synchronous submission lock and aborts its active request when reset begins. This coordination is intentionally single-process; horizontally scaled production deployments need database or distributed coordination.
 
 ## Legacy Adapter Rationale
 
@@ -88,4 +94,4 @@ This keeps the future agent surface auditable:
 
 ## Trade-offs
 
-This layer adds some ceremony around a small model boundary. The benefit is a clear contract for agentic behavior and a small blast radius for future changes. Current tests remain deterministic so behavior can be covered without network calls, secrets, or model availability.
+This layer adds some ceremony around a small model boundary. The benefit is a clear contract for agentic behavior and a small blast radius for future changes. Current tests remain deterministic so behavior can be covered without network calls, secrets, or model availability. Phase 6B2 should move complex or hostile PDF parsing to isolated asynchronous workers with process and memory limits; the current timeout only stops the API from waiting indefinitely.

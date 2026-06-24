@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type DragEvent } from "react";
 import {
   allowedUploadExtensions,
+  documentUploadErrorResponseSchema,
   documentUploadResponseSchema,
+  maxPdfUploadBytes,
   maxUploadBytes,
   type DocumentUploadResponse
 } from "@client-review-prep/shared";
@@ -18,6 +20,13 @@ import {
   invalidateUploadGeneration,
   nextUploadGeneration
 } from "../domain/uploadGeneration.js";
+import {
+  buildDocumentUploadRequest,
+  documentTypeForFile,
+  uploadErrorMessage,
+  validateSelectedUploadFile
+} from "../domain/documentUpload.js";
+import { createUploadSubmissionController } from "../domain/uploadSubmission.js";
 
 type SourceUploadPanelProps = {
   apiBaseUrl: string;
@@ -38,6 +47,9 @@ export const SourceUploadPanel = ({
   const observedDateId = useId();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadGenerationRef = useRef(0);
+  const submissionControllerRef = useRef(
+    createUploadSubmissionController()
+  );
   const [file, setFile] = useState<File | null>(null);
   const [observedDate, setObservedDate] = useState("2026-06-04");
   const [uploadState, setUploadState] = useState(initialUploadPanelState);
@@ -49,6 +61,7 @@ export const SourceUploadPanel = ({
   };
 
   useEffect(() => {
+    submissionControllerRef.current.abortActive();
     uploadGenerationRef.current = invalidateUploadGeneration(
       uploadGenerationRef.current
     );
@@ -57,7 +70,17 @@ export const SourceUploadPanel = ({
     clearNativeFileInput();
   }, [resetToken]);
 
+  useEffect(
+    () => () => {
+      submissionControllerRef.current.abortActive();
+    },
+    []
+  );
+
   const selectFile = (candidate: File | null) => {
+    if (submissionControllerRef.current.isActive()) {
+      return;
+    }
     setFile(candidate);
     setUploadState(selectUploadFile(candidate?.name ?? null));
     if (!candidate) {
@@ -67,11 +90,14 @@ export const SourceUploadPanel = ({
 
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault();
+    if (submissionControllerRef.current.isActive()) {
+      return;
+    }
     const droppedFiles = Array.from(event.dataTransfer.files);
 
     if (droppedFiles.length !== 1) {
       selectFile(null);
-      setUploadState(failUpload("Select one .txt or .md file."));
+      setUploadState(failUpload("Select one .txt, .md, or .pdf file."));
       return;
     }
 
@@ -79,13 +105,21 @@ export const SourceUploadPanel = ({
   };
 
   const upload = async () => {
-    if (!file) {
-      setUploadState(failUpload("Select one .txt or .md file."));
+    const submission = submissionControllerRef.current.tryStart();
+    if (!submission) {
       return;
     }
 
-    if (file.size > maxUploadBytes) {
-      setUploadState(failUpload("The file is too large for this local demo."));
+    if (!file) {
+      setUploadState(failUpload("Select one .txt, .md, or .pdf file."));
+      submissionControllerRef.current.finish(submission);
+      return;
+    }
+
+    const fileError = validateSelectedUploadFile(file);
+    if (fileError) {
+      setUploadState(failUpload(fileError));
+      submissionControllerRef.current.finish(submission);
       return;
     }
 
@@ -94,26 +128,30 @@ export const SourceUploadPanel = ({
     uploadGenerationRef.current = uploadGeneration;
 
     try {
-      const text = await file.text();
+      const payload = await buildDocumentUploadRequest({
+        clientId,
+        observedDate,
+        file
+      });
       const response = await fetch(
         `${apiBaseUrl}/api/clients/${clientId}/source-records/upload`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clientId,
-            observedDate,
-            sourceType: "ADVISER_MEETING_NOTE",
-            originalFilename: file.name,
-            mediaType: file.type || "application/octet-stream",
-            sizeBytes: file.size,
-            text
-          })
+          body: JSON.stringify(payload),
+          signal: submission.controller.signal
         }
       );
 
       if (!response.ok) {
-        throw new Error("Upload failed.");
+        const errorPayload = documentUploadErrorResponseSchema.safeParse(
+          await response.json().catch(() => null)
+        );
+        throw new Error(
+          uploadErrorMessage(
+            errorPayload.success ? errorPayload.data.code : null
+          )
+        );
       }
 
       const uploadResponse = documentUploadResponseSchema.parse(
@@ -129,19 +167,25 @@ export const SourceUploadPanel = ({
           onUploaded(uploadResponse);
         }
       );
-    } catch {
+    } catch (error) {
+      if (submission.controller.signal.aborted) {
+        return;
+      }
       applyIfCurrentUploadGeneration(
         uploadGeneration,
         uploadGenerationRef.current,
         () => {
           setUploadState(
             failUpload(
-              "The document could not be uploaded. Check the file type, date, and content."
+              error instanceof Error
+                ? error.message
+                : uploadErrorMessage(null)
             )
           );
         }
       );
     } finally {
+      submissionControllerRef.current.finish(submission);
       applyIfCurrentUploadGeneration(
         uploadGeneration,
         uploadGenerationRef.current,
@@ -156,7 +200,9 @@ export const SourceUploadPanel = ({
     <section className="rounded border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="text-lg font-semibold text-slate-950">Upload source note</h2>
       <p className="mt-1 text-sm leading-6 text-slate-600">
-        Accepted files: .txt and .md, up to 256 KB. Text is stored locally in PostgreSQL for this demo.
+        TXT/MD up to {maxUploadBytes / 1024} KB. Text-based PDFs up to{" "}
+        {maxPdfUploadBytes / (1024 * 1024)} MB and 25 pages. Scanned PDFs
+        require OCR and are not supported yet.
       </p>
       <div className="mt-4 grid gap-3">
         <label
@@ -164,7 +210,9 @@ export const SourceUploadPanel = ({
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
         >
-          <span className="font-semibold">Select or drop a text document</span>
+          <span className="font-semibold">
+            Select or drop a source document
+          </span>
           <span className="mt-1 block text-xs text-slate-500">
             {uploadState.selectedFileName ?? "No file selected"}
           </span>
@@ -174,6 +222,7 @@ export const SourceUploadPanel = ({
             id={fileInputId}
             ref={fileInputRef}
             type="file"
+            disabled={uploadState.isUploading}
             onChange={(event) => selectFile(event.target.files?.[0] ?? null)}
           />
         </label>
@@ -185,6 +234,7 @@ export const SourceUploadPanel = ({
           id={observedDateId}
           type="date"
           value={observedDate}
+          disabled={uploadState.isUploading}
           onChange={(event) => setObservedDate(event.target.value)}
         />
         <button
@@ -193,7 +243,11 @@ export const SourceUploadPanel = ({
           type="button"
           onClick={upload}
         >
-          {uploadState.isUploading ? "Uploading..." : "Upload source"}
+          {uploadState.isUploading
+            ? file && documentTypeForFile(file) === "PDF"
+              ? "Parsing PDF..."
+              : "Uploading..."
+            : "Upload source"}
         </button>
       </div>
       <div aria-live="polite" className="mt-3 text-sm">

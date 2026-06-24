@@ -5,6 +5,7 @@ import {
   buildSummaryMetrics,
   countUnresolvedReviewItems,
   mapFactToDto,
+  shouldIncludeAdviserAction,
   type FactForReview
 } from "./reviewService.js";
 
@@ -24,6 +25,7 @@ const createFact = (
   sourceRecord: {
     title: "Adviser Meeting Note"
   },
+  adviserDecisions: [],
   ...overrides
 });
 
@@ -161,5 +163,49 @@ describe("review service read-back mapping", () => {
       metrics.find((metric) => metric.label === "Items needing confirmation")
         ?.value
     ).toBe("0");
+  });
+
+  it("does not expose a pending risk action without a candidate or persisted decision", () => {
+    const risk = createFact({
+      id: "fact-risk-profile",
+      field: "Risk profile",
+      candidateValue: null,
+      lifecycleStatus: LifecycleStatus.CURRENT
+    });
+    const changes = buildMeaningfulChanges([risk]);
+    const metrics = buildSummaryMetrics([risk], changes);
+
+    expect(shouldIncludeAdviserAction(risk)).toBe(false);
+    expect(metrics.find((metric) => metric.label === "Meaningful changes")?.value)
+      .toBe("4");
+    expect(
+      metrics.find((metric) => metric.label === "Items needing confirmation")
+        ?.value
+    ).toBe("0");
+  });
+
+  it("keeps only the address increment when contradictory risk evidence is omitted", () => {
+    const facts = [
+      createFact({
+        candidateValue: "Joondalup",
+        lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION
+      }),
+      createFact({
+        id: "fact-risk-profile",
+        field: "Risk profile",
+        candidateValue: null,
+        lifecycleStatus: LifecycleStatus.CURRENT
+      })
+    ];
+    const changes = buildMeaningfulChanges(facts);
+    const metrics = buildSummaryMetrics(facts, changes);
+
+    expect(metrics.find((metric) => metric.label === "Meaningful changes")?.value)
+      .toBe("5");
+    expect(
+      metrics.find((metric) => metric.label === "Items needing confirmation")
+        ?.value
+    ).toBe("1");
+    expect(shouldIncludeAdviserAction(facts[1]!)).toBe(false);
   });
 });

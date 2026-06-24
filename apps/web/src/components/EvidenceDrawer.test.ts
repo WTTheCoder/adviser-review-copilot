@@ -29,7 +29,8 @@ const createFact = (overrides: Partial<ClientFact> = {}): ClientFact => ({
 
 const createAction = (
   factId: string,
-  decision: NonNullable<AdviserAction["latestDecision"]>["decision"]
+  decision: NonNullable<AdviserAction["latestDecision"]>["decision"],
+  candidateValue?: string
 ): AdviserAction => ({
   id: factId === "fact-address" ? "confirm-address" : "review-risk-profile",
   factId,
@@ -46,6 +47,7 @@ const createAction = (
   latestDecision: {
     decision,
     note: null,
+    candidateValue,
     createdAt: "2026-06-04T00:00:00.000Z"
   }
 });
@@ -109,15 +111,16 @@ describe("Evidence drawer explanation mapping", () => {
         currentLabel: "Official value",
         currentValue: "Balanced",
         officialValue: "Balanced",
-        candidateValue: "Growth-oriented",
+        candidateValue: "High Growth",
         lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
         status: "Requires adviser approval",
         memoryExplanation:
-          "Growth-oriented requires adviser approval before use and stays unchanged until reviewed."
+          "High Growth requires adviser approval before use and stays unchanged until reviewed."
       })
     );
 
     expect(explanation).toContain("high-impact risk-profile candidate");
+    expect(explanation).toContain("High Growth");
     expect(explanation).toContain("requires adviser approval");
     expect(explanation).toContain("Balanced remains the official value");
   });
@@ -128,19 +131,19 @@ describe("Evidence drawer explanation mapping", () => {
         id: "fact-risk-profile",
         field: "Risk profile",
         currentLabel: "Official value",
-        currentValue: "Growth-oriented",
-        officialValue: "Growth-oriented",
+        currentValue: "High Growth",
+        officialValue: "High Growth",
         candidateValue: null,
         previousValue: "Balanced",
         lifecycleStatus: "CURRENT",
         status: "Current",
         memoryExplanation:
-          "Growth-oriented requires adviser approval before use and stays unchanged until reviewed."
+          "High Growth requires adviser approval before use and stays unchanged until reviewed."
       }),
-      createAction("fact-risk-profile", "APPROVE")
+      createAction("fact-risk-profile", "APPROVE", "High Growth")
     );
 
-    expect(explanation).toContain("adviser approved Growth-oriented");
+    expect(explanation).toContain("adviser approved High Growth");
     expect(explanation).toContain("current official risk profile");
     expect(explanation).toContain("Balanced is retained as previous history");
     expectNoCompletedStaleCopy(explanation);
@@ -160,12 +163,32 @@ describe("Evidence drawer explanation mapping", () => {
         memoryExplanation:
           "Growth-oriented requires adviser approval before use and stays unchanged until reviewed."
       }),
-      createAction("fact-risk-profile", "KEEP_CURRENT")
+      createAction("fact-risk-profile", "KEEP_CURRENT", "High Growth")
     );
 
     expect(explanation).toContain("adviser retained Balanced");
-    expect(explanation).toContain("candidate was not promoted");
+    expect(explanation).toContain("High Growth was not promoted");
     expectNoCompletedStaleCopy(explanation);
+  });
+
+  it("does not claim unchanged Balanced was approved", () => {
+    const explanation = getEvidenceExplanation(
+      createFact({
+        id: "fact-risk-profile",
+        field: "Risk profile",
+        currentValue: "Balanced",
+        officialValue: "Balanced",
+        candidateValue: null,
+        previousValue: null,
+        lifecycleStatus: "CURRENT",
+        status: "Current",
+        memoryExplanation: "Balanced remains the official risk profile."
+      }),
+      createAction("fact-risk-profile", "APPROVE", "Balanced")
+    );
+
+    expect(explanation).not.toContain("approved Balanced");
+    expect(explanation).toBe("Balanced remains the official risk profile.");
   });
 
   it("uses persisted read-back state and latest decision instead of stale stored prose", () => {

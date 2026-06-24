@@ -6,6 +6,22 @@ export const canonicalRiskProfiles = [
 ] as const;
 
 export type CanonicalRiskProfile = (typeof canonicalRiskProfiles)[number];
+export type RiskProfileIntent =
+  | "SUPPORTED"
+  | "REVIEWABLE"
+  | "REJECTED"
+  | "CONTRADICTORY";
+
+export type RiskProfileEvidence = {
+  proposedValue: CanonicalRiskProfile | null;
+  evidence: string;
+};
+
+export type RiskProfileEvidenceClassification = {
+  intent: RiskProfileIntent;
+  candidate: CanonicalRiskProfile | null;
+  evidence: string | null;
+};
 
 const normalizePhrase = (value: string) =>
   value
@@ -25,22 +41,105 @@ const phraseMap: ReadonlyMap<string, CanonicalRiskProfile> = new Map([
   ["more growth oriented", "Growth-oriented"],
   ["more growth oriented investment approach", "Growth-oriented"],
   ["aggressive growth", "High Growth"],
+  ["more aggressive growth strategy", "High Growth"],
   ["high growth", "High Growth"]
 ]);
 
-const negatedOrConflictingGrowthPatterns = [
-  /\bdoes not want\b.*\bgrowth\b/,
-  /\bdo not want\b.*\bgrowth\b/,
-  /\bnot\b.*\bgrowth\b/,
+const rejectedRiskIntentPatterns = [
+  /\bdoes not want\b/,
+  /\bdo not want\b/,
+  /\bnot considering\b/,
+  /\bnot comfortable with\b/,
+  /\brejected\b/,
+  /\bruled (?:it )?out\b/,
+  /\bdecided against\b/,
+  /\bno longer wants?\b/,
   /\bless growth oriented\b/,
   /\bremain balanced\b/,
-  /\bwants to remain balanced\b/,
-  /\bwant to remain balanced\b/,
+  /\bstay balanced\b/,
+  /\bstays balanced\b/,
+  /\bkeep (?:the )?balanced(?: profile)?\b/,
+  /\bretain (?:the )?balanced(?: profile)?\b/,
   /\bnot high growth\b/
 ];
 
-const isGrowthProfile = (value: CanonicalRiskProfile) =>
-  value === "Growth-oriented" || value === "High Growth";
+const reviewableRiskIntentPatterns = [
+  /\bconsidering\b/,
+  /\bmay\b/,
+  /\bmight\b/,
+  /\bcould\b/,
+  /\bpossible\b/
+];
+
+export const classifyRiskProfileIntent = (
+  evidence: string
+): Exclude<RiskProfileIntent, "CONTRADICTORY"> => {
+  const normalizedEvidence = normalizePhrase(evidence);
+
+  if (
+    rejectedRiskIntentPatterns.some((pattern) =>
+      pattern.test(normalizedEvidence)
+    )
+  ) {
+    return "REJECTED";
+  }
+
+  if (
+    reviewableRiskIntentPatterns.some((pattern) =>
+      pattern.test(normalizedEvidence)
+    )
+  ) {
+    return "REVIEWABLE";
+  }
+
+  return "SUPPORTED";
+};
+
+export const classifyRiskProfileEvidence = (
+  evidenceItems: readonly RiskProfileEvidence[]
+): RiskProfileEvidenceClassification => {
+  const evaluated = evidenceItems.map((item) => ({
+    ...item,
+    intent: classifyRiskProfileIntent(item.evidence)
+  }));
+  const rejected = evaluated.some((item) => item.intent === "REJECTED");
+  const positive = evaluated.filter(
+    (
+      item
+    ): item is typeof item & {
+      proposedValue: CanonicalRiskProfile;
+      intent: "SUPPORTED" | "REVIEWABLE";
+    } => item.proposedValue !== null && item.intent !== "REJECTED"
+  );
+  const proposedValues = new Set(
+    positive.map((item) => item.proposedValue)
+  );
+
+  if (positive.length === 0) {
+    return {
+      intent: rejected ? "REJECTED" : "SUPPORTED",
+      candidate: null,
+      evidence: null
+    };
+  }
+
+  if (rejected || proposedValues.size > 1) {
+    return {
+      intent: "CONTRADICTORY",
+      candidate: null,
+      evidence: null
+    };
+  }
+
+  const supportingEvidence = positive[0];
+  return {
+    intent: positive.some((item) => item.intent === "REVIEWABLE")
+      ? "REVIEWABLE"
+      : "SUPPORTED",
+    candidate: supportingEvidence?.proposedValue ?? null,
+    evidence: supportingEvidence?.evidence ?? null
+  };
+};
 
 export const normalizeRiskProfileCandidate = (input: {
   proposedValue: string;
@@ -53,12 +152,8 @@ export const normalizeRiskProfileCandidate = (input: {
     return null;
   }
 
-  const normalizedEvidence = normalizePhrase(input.evidence);
-  const combinedText = `${normalizedProposedValue} ${normalizedEvidence}`;
-
   if (
-    isGrowthProfile(canonicalValue) &&
-    negatedOrConflictingGrowthPatterns.some((pattern) => pattern.test(combinedText))
+    classifyRiskProfileIntent(input.evidence) === "REJECTED"
   ) {
     return null;
   }
