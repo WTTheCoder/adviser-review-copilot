@@ -20,6 +20,10 @@ import {
   applyDecisionToFact,
   isDecisionAllowedForFact
 } from "./decisionRules.js";
+import {
+  decodeDecisionCandidateValue,
+  encodeDecisionNote
+} from "./decisionNoteCodec.js";
 
 export type ExtractedCandidateProjection = {
   field: "ADDRESS" | "RISK_PROFILE" | "FINANCIAL_GOAL" | "EMPLOYMENT" | "ANNUAL_INCOME" | "SUPERANNUATION";
@@ -134,19 +138,6 @@ const fieldProjectionTargets = {
 
 const clearCandidateExplanation = (field: string) =>
   `No ${field.toLowerCase()} candidate was extracted in the latest preparation run. The official value remains unchanged.`;
-
-const decisionCandidateMarker = "\nCandidate value at decision: ";
-
-const candidateValueFromDecisionNote = (note: string | null) => {
-  if (!note) {
-    return null;
-  }
-
-  const markerIndex = note.lastIndexOf(decisionCandidateMarker);
-  return markerIndex >= 0
-    ? note.slice(markerIndex + decisionCandidateMarker.length).trim() || null
-    : null;
-};
 
 type LegacyAdapter = ReturnType<typeof createLegacyCrmAdapter>;
 
@@ -297,7 +288,7 @@ export const createReviewService = (
             ? {
                 decision: latestDecision.decisionType,
                 note: latestDecision.note,
-                candidateValue: candidateValueFromDecisionNote(
+                candidateValue: decodeDecisionCandidateValue(
                   latestDecision.note
                 ),
                 createdAt: latestDecision.createdAt.toISOString()
@@ -410,10 +401,11 @@ export const createReviewService = (
     }
 
     await client.$transaction(async (transaction) => {
-      const note = `${
+      const note = encodeDecisionNote(
         payload.note ??
-        `Local demo decision: ${payload.decision}. No production CRM was updated.`
-      }${decisionCandidateMarker}${fact.candidateValue}`;
+          `Local demo decision: ${payload.decision}. No production CRM was updated.`,
+        fact.candidateValue
+      );
 
       await transaction.adviserDecision.create({
         data: {

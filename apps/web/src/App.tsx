@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   adviserDecisionPayloadSchema,
   healthResponseSchema,
@@ -26,6 +26,7 @@ import {
   getReviewStatusLabel,
   type ReviewPhase
 } from "./domain/reviewWorkflow.js";
+import { createDecisionSubmissionLock } from "./domain/decisionSubmissionLock.js";
 import type { ClientFact, UploadExecutionMetadata } from "./types/demo.js";
 
 const DEMO_CLIENT_ID = "demo-alex-taylor";
@@ -41,6 +42,7 @@ export const App = () => {
   const [latestUploadTrace, setLatestUploadTrace] =
     useState<UploadExecutionMetadata | null>(null);
   const [uploadPanelResetToken, setUploadPanelResetToken] = useState(0);
+  const decisionSubmissionLock = useRef(createDecisionSubmissionLock());
   const apiBaseUrl = useMemo(
     () => import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001",
     []
@@ -146,6 +148,10 @@ export const App = () => {
   };
 
   const handleDecision = async (factId: string, decision: DecisionType) => {
+    if (!decisionSubmissionLock.current.tryStart(factId)) {
+      return;
+    }
+
     setSavingFactId(factId);
     setLoadError(null);
 
@@ -175,6 +181,7 @@ export const App = () => {
         "The adviser decision could not be saved. No production CRM was updated."
       );
     } finally {
+      decisionSubmissionLock.current.finish(factId);
       setSavingFactId(null);
     }
   };

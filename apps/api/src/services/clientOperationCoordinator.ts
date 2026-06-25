@@ -8,6 +8,7 @@ type UploadContext = {
 type ClientOperationState = {
   generation: number;
   uploadActive: boolean;
+  criticalOperations: number;
   criticalSection: Promise<void>;
 };
 
@@ -38,10 +39,21 @@ export class ClientOperationCoordinator {
     const state: ClientOperationState = {
       generation: 0,
       uploadActive: false,
+      criticalOperations: 0,
       criticalSection: Promise.resolve()
     };
     this.states.set(clientId, state);
     return state;
+  }
+
+  private releaseIfIdle(clientId: string, state: ClientOperationState) {
+    if (
+      !state.uploadActive &&
+      state.criticalOperations === 0 &&
+      this.states.get(clientId) === state
+    ) {
+      this.states.delete(clientId);
+    }
   }
 
   private async runCritical<T>(
@@ -49,6 +61,7 @@ export class ClientOperationCoordinator {
     operation: () => Promise<T>
   ): Promise<T> {
     const state = this.stateFor(clientId);
+    state.criticalOperations += 1;
     const previous = state.criticalSection;
     let release: () => void = () => undefined;
     state.criticalSection = new Promise<void>((resolve) => {
@@ -60,6 +73,8 @@ export class ClientOperationCoordinator {
       return await operation();
     } finally {
       release();
+      state.criticalOperations -= 1;
+      this.releaseIfIdle(clientId, state);
     }
   }
 
@@ -82,6 +97,7 @@ export class ClientOperationCoordinator {
       return await this.uploadContext.run(context, operation);
     } finally {
       state.uploadActive = false;
+      this.releaseIfIdle(clientId, state);
     }
   }
 
@@ -111,5 +127,9 @@ export class ClientOperationCoordinator {
       this.stateFor(clientId).generation += 1;
       return operation();
     });
+  }
+
+  get trackedClientCount() {
+    return this.states.size;
   }
 }

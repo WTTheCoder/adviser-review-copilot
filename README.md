@@ -1,205 +1,203 @@
 # Client Review Prep Agent
 
-Client Review Prep Agent is a prototype for financial advisers preparing annual client reviews. The long-term direction is to prepare source-backed review material from fragmented legacy CRM records, review documents, and meeting notes.
+An AI-assisted annual-review preparation agent for financial advisers that combines legacy CRM data with uploaded client documents while keeping high-impact decisions under adviser control.
 
-This repository is not a production financial-advice system and does not contain real customer data, proprietary branding, or hardcoded model-provider secrets.
+## The Problem
 
-## Current Milestone
+Annual-review information is often fragmented across legacy CRM records, prior reviews, meeting notes, and client documents. Advisers spend valuable time finding changes, checking sources, and assembling a coherent current picture.
 
-Phase 6B1 adds controlled text-based PDF ingestion alongside the existing `.txt` and `.md` adviser-note flow. Review preparation, document ingestion, and adviser decisions route through a typed execution harness with registered skills, registered tools, allowlists, Zod validation, safe failure responses, and visible execution metadata.
+Letting an AI model overwrite financial records directly would be unsafe. This project instead treats model output as a proposal: every candidate is source-backed, reviewable, and subject to deterministic domain rules. Uncertain address changes require confirmation, while risk-profile changes require explicit adviser approval.
 
-Mock extraction is the safe default and works offline. Optional live OpenAI extraction uses the official OpenAI SDK and Responses API when `AI_MODE=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL` are configured.
+## What The Application Does
 
-Phase 5 extraction candidates now drive the adviser-facing candidate projection for address and risk profile while official facts remain backend-controlled. Empty extraction clears the current candidate projection for those fields rather than showing stale seeded candidates. Numeric extraction remains advisory until deterministic normalization is expanded.
+- Loads a fictional client's baseline from a legacy CRM adapter.
+- Accepts UTF-8 TXT, Markdown, and text-based PDF documents.
+- Extracts source-backed candidate facts in deterministic mock mode or optional OpenAI mode.
+- Reconciles official, previous, and candidate values without silently replacing official facts.
+- Identifies meaningful changes and unresolved review items.
+- Routes address candidates for confirmation and risk-profile candidates for approval.
+- Preserves evidence, source attribution, workflow traces, and adviser decisions.
+- Supports deterministic reset and replay of the Alex Taylor demo.
 
-Risk-profile candidates are normalized by application-owned domain logic before projection. The Phase 5 canonical set is `Conservative`, `Balanced`, `Growth-oriented`, and `High Growth`; unsupported or ambiguous model phrases are omitted rather than stored as arbitrary risk-profile values.
+## Demo Workflow
 
-The `Items needing confirmation` summary metric is a combined unresolved-review count for facts in `NEEDS_CONFIRMATION` or `REQUIRES_ADVISER_APPROVAL`. `Meaningful changes` combines the fictional verified historical changes with currently visible candidate changes from the latest preparation projection.
+1. Reset the fictional Alex Taylor case.
+2. Show the CRM baseline: address `East Perth` and risk profile `Balanced`.
+3. Upload a source from [`demo/`](demo/).
+4. Prepare the annual review.
+5. Inspect the possible new address and possible new risk profile.
+6. Open Evidence and the execution trace to show where each proposal came from.
+7. Confirm the address and approve the risk-profile change.
+8. Refresh the page.
+9. Verify the approved values remain current and the former values remain visible as history.
 
-Dynamic skills, authentication, OCR, scanned/image-only PDFs, DOCX parsing, malware scanning services, cloud object storage, and real financial recommendations are still deferred.
+See [`demo/DEMO_SCRIPT.md`](demo/DEMO_SCRIPT.md) for a reliable 3-5 minute walkthrough.
 
 ## Architecture
 
-```text
-React adviser workspace
--> Node.js review API
--> controlled execution harness
--> registered skills
--> allowlisted tools
--> document-type validation and bounded PDF text extraction
--> normalized SourceRecord text persistence
--> controlled candidate-fact extractor
--> review service
--> controlled legacy CRM adapter
--> PostgreSQL
+```mermaid
+flowchart LR
+  UI[React Web UI] --> API[Fastify API]
+  API --> Skill[Review preparation skill]
+  Skill --> Tools[Allowlisted tools]
+  Tools --> Legacy[Legacy CRM adapter]
+  Tools --> Ingest[Document ingestion]
+  Tools --> AI[Candidate extraction]
+  Legacy --> Domain[Domain reconciliation and decision rules]
+  Ingest --> Domain
+  AI --> Domain
+  Domain --> DB[Prisma / PostgreSQL]
 ```
 
-The legacy CRM adapter is a deliberate backend boundary. It simulates an existing legacy CRM that controlled skills operate through. The adviser-facing application does not require users to navigate that legacy system directly.
+Skills orchestrate bounded workflows. Tools perform allowlisted operations. AI proposes candidate facts; backend domain rules determine lifecycle state and promotion. Advisers retain control of high-impact updates.
 
-Phase 4 skills are deterministic TypeScript modules, not model prompts. The harness validates skill inputs, enforces tool allowlists, validates tool and skill outputs, records execution events, and returns safe error messages.
+The API is separated into routes, an execution harness, registered skills and tools, AI provider adapters, domain rules, services, and Prisma persistence. The frontend consumes validated shared contracts and does not own financial promotion rules.
 
-Phase 5 model output is advisory. The model returns schema-constrained candidate facts only; deterministic application rules decide what remains pending confirmation, requires adviser approval, or stays advisory.
+## Technology Stack
 
-## Repository Structure
+- React, TypeScript, Vite, and Tailwind CSS
+- Node.js and Fastify
+- PostgreSQL and Prisma
+- Zod shared contracts
+- Vitest
+- Docker Compose
+- GitHub Actions
+- OpenAI Responses API integration with deterministic mock mode
+- `unpdf` / PDF.js-based text extraction
 
-- `apps/web`: React, TypeScript, Vite, and Tailwind CSS frontend.
-- `apps/api`: Node.js, TypeScript, Fastify API, controlled execution harness, deterministic skills/tools, Prisma schema, migrations, and seed script.
-- `apps/api/src/ai`: Candidate-fact extraction contracts, schemas, prompt builder, mock provider, OpenAI provider adapter, and small eval fixtures.
-- `packages/shared`: Shared TypeScript types and Zod schemas for API contracts.
-- `docs/architecture`: Architecture notes for the controlled skills and harness boundary.
-- `.github/workflows/ci.yml`: CI for lint, type checking, tests, and builds.
-- `docker-compose.yml`: Local PostgreSQL service for the demo.
+## Supported Documents And Limits
 
-## Installation
+Application-owned constants in [`packages/shared/src/index.ts`](packages/shared/src/index.ts) define the enforced limits:
 
-```bash
+| Input | Current limit |
+| --- | --- |
+| TXT / Markdown | UTF-8, 256 KiB and 262,144 decoded characters |
+| PDF original bytes | 2 MiB |
+| PDF pages | 25 |
+| PDF extracted text | 250,000 characters and 512 KiB UTF-8 |
+| Filename | 120 sanitized characters |
+| Extractor input | 4,000 characters |
+| Candidate facts | 10 |
+| Evidence / proposed value | 240 / 160 characters |
+
+PDF support is limited to documents with embedded selectable text. OCR, scanned/image-only PDFs, encrypted or password-protected PDFs, form extraction, and embedded-file processing are not supported. Raw PDF bytes are processed in memory and are not retained; only normalized extracted text and safe metadata are stored.
+
+## Safety Model
+
+- Candidate facts are never treated as official facts automatically.
+- AI cannot directly mutate official client records.
+- Evidence is linked to the source record used for extraction.
+- Address confirmation and risk-profile approval are deterministic backend decisions.
+- Unsupported, negated, retained-current, rejected, and contradictory risk language does not create an aggressive candidate.
+- Skills may call only their allowlisted tools.
+- Provider and parser errors are mapped to application-owned safe errors.
+- Request, decoded-byte, page, extracted-character, extracted-byte, and parser wait-time limits are enforced.
+- PDF parsing has a 15-second application timeout, but it is not process-isolated; a timed-out parser may continue consuming local process resources until the library call finishes.
+- Uploaded text is untrusted content and is displayed as plain text.
+
+This is portfolio/demo software, not production financial advice software.
+
+## Local Setup
+
+### Prerequisites
+
+- Node.js `22.13.0` (the CI version)
+- npm
+- Docker Desktop with Docker Compose
+- PowerShell
+
+### First Start On Windows
+
+```powershell
 npm install
-```
 
-Copy `.env.example` to `.env` if you want local environment variables available in your shell. `.env` remains ignored by Git.
+$env:POSTGRES_PORT = "55432"
+$env:DATABASE_URL = "postgresql://client_review:local_demo_password@localhost:55432/client_review_prep?schema=public"
+$env:AI_MODE = "mock"
 
-AI configuration:
-
-- `AI_MODE=mock`: offline deterministic extraction, safe default.
-- `AI_MODE=openai`: uses the official OpenAI SDK and Responses API.
-- `OPENAI_API_KEY`: required only for live OpenAI mode.
-- `OPENAI_MODEL`: required only for live OpenAI mode.
-- `OPENAI_TIMEOUT_MS=15000`: live request timeout.
-
-## Database
-
-Start PostgreSQL:
-
-```bash
 npm run db:up
-```
-
-Run migrations:
-
-```bash
+npm run prisma:generate -w apps/api
 npm run db:migrate
-```
-
-Seed the fictional Alex Taylor demo:
-
-```bash
 npm run db:seed
-```
-
-Reset the local database and reseed:
-
-```bash
-npm run db:reset
-```
-
-Stop PostgreSQL:
-
-```bash
-npm run db:down
-```
-
-Local demo database defaults:
-
-- Database: `client_review_prep`
-- User: `client_review`
-- Password: `local_demo_password`
-- Port: `5432`
-
-These are local-demo credentials only.
-
-## Development Commands
-
-```bash
 npm run dev
+```
+
+Open `http://localhost:5173`. The API health endpoint is `http://localhost:3001/health`.
+
+The `55432` host port avoids a common conflict with an existing PostgreSQL installation. Keep `POSTGRES_PORT` and the port in `DATABASE_URL` aligned.
+
+### Subsequent Starts
+
+```powershell
+$env:POSTGRES_PORT = "55432"
+$env:DATABASE_URL = "postgresql://client_review:local_demo_password@localhost:55432/client_review_prep?schema=public"
+$env:AI_MODE = "mock"
+npm run db:up
+npm run dev
+```
+
+Stop the database with `npm run db:down`.
+
+Optional live extraction requires `AI_MODE=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL`. Mock mode is the safe, deterministic default and is sufficient for the complete demo.
+
+## Testing
+
+Run the same quality checks used for release verification:
+
+```powershell
+npm run prisma:generate -w apps/api
 npm run lint
 npm run typecheck
 npm test
 npm run build
+docker compose config
+git diff --check
 ```
 
-`npm run dev` starts both the frontend and backend. The API expects `DATABASE_URL` to point at the local PostgreSQL database.
+Final verified suite: **279 tests** across the API, web, and shared workspaces.
 
-GitHub Actions runs lint, type checking, tests, and production builds for pushes and pull requests targeting `main`. CI does not start PostgreSQL yet; database-dependent CI can be added in a later focused change.
+GitHub Actions runs Prisma generation, lint, type checking, tests, and production builds on pushes and pull requests targeting `main`.
 
-## Local URLs
+## Repository Structure
 
-- Web app: `http://localhost:5173`
-- API health: `http://localhost:3001/health`
-- Demo review: `http://localhost:3001/api/clients/demo-alex-taylor/review`
+```text
+.
+|-- apps/
+|   |-- api/              Fastify API, skills, tools, domain rules, Prisma
+|   `-- web/              React adviser workspace
+|-- packages/
+|   `-- shared/           Shared Zod schemas, types, and ingestion limits
+|-- demo/                 Fictional sample documents and demo script
+|-- docs/architecture/    Model boundary and execution-harness notes
+|-- .github/workflows/    Continuous integration
+|-- docker-compose.yml    Local PostgreSQL
+`-- package.json          npm-workspaces commands
+```
 
-## API Endpoints
+## Current Scope And Limitations
 
-- `GET /health`: API health check.
-- `GET /api/clients/:clientId/review`: Returns client summary, source records, facts, meaningful changes, adviser actions, and latest workflow trace.
-- `POST /api/clients/:clientId/prepare-review`: Creates or refreshes a deterministic workflow run and returns prepared review data.
-- `POST /api/clients/:clientId/source-records/upload`: Validates one local `.txt`, `.md`, or text-based `.pdf` source document and stores normalized text as an adviser meeting-note source record.
-- `POST /api/clients/:clientId/facts/:factId/decision`: Persists one adviser decision and lets backend domain logic update fact state.
-- `POST /api/demo/reset`: Local demonstration reset for the fictional Alex Taylor data.
+This repository demonstrates a controlled financial-agent workflow with fictional data. It is not a production CRM integration, a system of record, or financial advice.
 
-The reset endpoint is for local demonstration only. It reseeds the fictional Alex Taylor data and removes uploaded demo source records. Upload persistence and reset share a per-client generation and serialized commit boundary, so an upload that began before reset cannot write afterward. This in-memory coordination is suitable only for the single-process local prototype; multiple API instances would require database-backed or distributed coordination.
+Production follow-up work includes:
 
-## Document Uploads
+- authentication and authorization;
+- multi-tenancy and tenant isolation;
+- real CRM integrations;
+- OCR for scanned documents;
+- worker/process isolation for document parsing;
+- object storage, retention controls, and malware scanning;
+- distributed upload/reset coordination across API instances;
+- production observability and incident response;
+- privacy, regulatory, and compliance review;
+- production model evaluation and monitoring.
 
-Phase 6B1 supports one local `.txt`, `.md`, or `.pdf` upload at a time for the fictional Alex Taylor client.
+Automated backend and domain coverage is strong. Frontend upload lock/abort/reset behavior is covered mainly through focused state/controller tests rather than full browser interaction tests. Runtime composition is explicit and inspected in tests, but a larger multi-request integration suite remains a production follow-up. The in-memory client operation coordinator is intentionally single-process.
 
-- TXT/Markdown: UTF-8 text, 256 KB by server-calculated UTF-8 byte length, and 256K decoded characters.
-- PDF: `application/pdf`, 2 MB original bytes, 25 pages, 250,000 extracted characters, and 512 KB extracted UTF-8 text.
-- PDF support is limited to embedded selectable text. OCR, scanned/image-only PDFs, encrypted PDFs, password-protected PDFs, embedded attachments, form-field extraction, and an embedded PDF viewer are not supported.
+## Design Principles
 
-The upload API keeps the existing application-owned JSON protocol. Text is sent as validated JSON text; PDF bytes are sent as bounded base64 inside a discriminated JSON request. Fastify applies a 2,812,588-byte route body limit and rejects oversized JSON before schema validation, base64 decoding, parsing, or persistence. This adds base64 size overhead compared with multipart streaming, but preserves the fixed route, one-file limit, in-memory processing, and no-filesystem boundary for this small local prototype. Multipart streaming can be reconsidered for a production ingestion service.
-
-PDF parsing uses `unpdf` 1.6.2 under the MIT license. It accepts in-memory bytes and ships a serverless PDF.js build with its worker bundled, so no worker configuration is required in the Node.js API. The application wrapper disables PDF.js string evaluation, does not render pages or images, does not fetch URLs, and exposes only normalized text, page count, safe counts, and application-owned warnings/errors. Encryption/password handling is derived from parser errors rather than raw `/Encrypt` substring scanning. Tests cover the demonstrated PDF.js `PasswordException` shape; no encrypted fixture is committed, so parser failures that cannot be classified accurately fall back to `PDF_PARSE_FAILED` rather than guessing. A centralized 15-second timeout bounds how long the API awaits parsing and returns a safe application error; it does not terminate parser CPU or memory use if the underlying library continues running. Its other limitation is that PDF text order depends on the document's embedded text structure; complex layouts may not read like a visually rendered page.
-
-Uploaded filenames are treated as untrusted display metadata: path components are stripped, traversal and control characters are rejected, length is limited, and filenames are never used as server filesystem paths. Uploaded Markdown and extracted PDF text are displayed as plain text, not rendered as HTML.
-
-For this local prototype, validated TXT/Markdown text or normalized extracted PDF text and safe metadata are stored in PostgreSQL on the existing `SourceRecord` row. Raw PDF bytes are not retained. A production system would normally require secure object storage, retention and deletion policy, malware scanning, access controls, and audit controls before accepting real client documents.
-
-Uploaded source text is untrusted data. It can be used as evidence for candidate extraction, but it cannot choose tools, execute instructions, approve facts, write to a production CRM, read server files, or access secrets.
-
-Source-record selection for preparation is ordered by newest observed date, uploaded records first when dates tie, then stable source-record ID. TXT, Markdown, and PDF uploads are treated equally when observed dates are equal.
-
-## Controlled Skills and Tools
-
-Registered skills:
-
-- `load-client-context`: Loads a client, source records, and known facts through legacy CRM tools.
-- `reconcile-client-facts`: Reconciles loaded facts into adviser-review items.
-- `prepare-annual-review`: Coordinates review preparation, workflow trace persistence, and review response generation.
-- `ingest-client-document`: Validates one local text or PDF upload, extracts bounded PDF text when needed, and persists normalized source text.
-- `apply-adviser-decision`: Applies one adviser decision through deterministic backend domain rules.
-
-Registered tools:
-
-- `legacy.getClient`
-- `legacy.getSourceRecords`
-- `legacy.getFacts`
-- `document.validateTextUpload`
-- `document.validatePdfUpload`
-- `document.extractPdfText`
-- `ai.extractCandidateFacts`
-- `review.createWorkflowRun`
-- `review.recordWorkflowStep`
-- `review.createUploadedSourceRecord`
-- `review.getPreparedReview`
-- `review.applyDecision`
-
-The frontend displays the selected or executed skill and extraction mode in the review workspace and keeps the existing execution trace visible. Re-running preparation is supported; repeated runs create a new workflow run without duplicating seeded facts or source records.
-
-Extraction limits:
-
-- Meeting-note text sent to the extractor is capped at 4,000 characters.
-- At most 10 candidate facts are accepted.
-- Evidence text is capped at 240 characters.
-- Proposed values are capped at 160 characters.
-
-Only the fictional adviser meeting-note text, safe client display name, source metadata, and narrow supported-field list are sent to OpenAI in live mode. API keys, audit history, database rows, chain of thought, raw provider payloads, and unrelated customer data are not sent or stored by this prototype.
-
-## Demonstration Workflow
-
-The seeded demo uses one fictional client, Alex Taylor, advised by Jordan Lee for the 2026 Annual Review. It loads three source records: a 2023 legacy CRM record, a 2025 annual review, and a 2026 adviser meeting note. You can add one `.txt`, `.md`, or text-based `.pdf` note from the upload panel, then run Prepare/Re-run to extract candidate address and risk-profile changes from the uploaded source in mock mode.
-
-The workflow persists preparation results, adviser decisions, and audit trace records in PostgreSQL. Refreshing the browser after preparation or after adviser decisions keeps the persisted state visible.
-
-## Later Milestones
-
-Model-selected skills are intentionally not included in this milestone. Phase 6B2 defers OCR and scanned/image-only PDF handling. Complex or malicious PDFs remain a reason to move parsing into isolated asynchronous workers with process and memory limits. Other later work includes DOCX and image ingestion, multiple-file batch upload, multipart/streaming transport review, cloud object storage, malware scanning services, authentication, production CRM writes, distributed reset/upload coordination, and deployment hardening.
+- AI proposes; domain rules decide.
+- Evidence before mutation.
+- Human approval for high-impact facts.
+- Deterministic fallback.
+- Bounded ingestion.
+- Auditable execution.
