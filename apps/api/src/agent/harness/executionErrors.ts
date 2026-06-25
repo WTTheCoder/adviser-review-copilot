@@ -7,6 +7,8 @@ export type ExecutionErrorCode =
   | "INVALID_TOOL_INPUT"
   | "INVALID_TOOL_OUTPUT"
   | "INVALID_ADVISER_DECISION"
+  | "DECISION_CONFLICT"
+  | "CLIENT_MUTATION_INVALIDATED"
   | "SKILL_EXECUTION_FAILED"
   | "PDF_INVALID_SIGNATURE"
   | "PDF_TOO_LARGE"
@@ -29,6 +31,10 @@ const defaultMessages: Record<ExecutionErrorCode, string> = {
   INVALID_TOOL_OUTPUT: "The tool output was invalid.",
   INVALID_ADVISER_DECISION:
     "This adviser decision is not valid for the current candidate state.",
+  DECISION_CONFLICT:
+    "The client state changed before this adviser decision could be saved.",
+  CLIENT_MUTATION_INVALIDATED:
+    "The client operation was cancelled because the demo state changed.",
   SKILL_EXECUTION_FAILED: "The skill execution failed.",
   PDF_INVALID_SIGNATURE: "The selected file is not a valid PDF.",
   PDF_TOO_LARGE: "The PDF is too large for this local demo.",

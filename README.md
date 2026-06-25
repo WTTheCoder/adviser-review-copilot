@@ -149,12 +149,18 @@ npm run prisma:generate -w apps/api
 npm run lint
 npm run typecheck
 npm test
+npm run test:integration
 npm run build
 docker compose config
 git diff --check
 ```
 
-Final verified suite: **279 tests** across the API, web, and shared workspaces.
+The PostgreSQL integration suite requires `TEST_DATABASE_URL` and a migrated
+test schema. It covers deterministic concurrent adviser decisions, durable reset
+epoch conflicts, preparation/decision races, idempotent fact revisions,
+transactional preparation and reset rollback, and mandatory audit rollback.
+GitHub Actions provisions PostgreSQL, applies migrations, and runs this suite
+separately from the regular unit tests.
 
 GitHub Actions runs Prisma generation, lint, type checking, tests, and production builds on pushes and pull requests targeting `main`.
 
@@ -191,7 +197,7 @@ Production follow-up work includes:
 - privacy, regulatory, and compliance review;
 - production model evaluation and monitoring.
 
-Automated backend and domain coverage is strong. Frontend upload lock/abort/reset behavior is covered mainly through focused state/controller tests rather than full browser interaction tests. Runtime composition is explicit and inspected in tests, but a larger multi-request integration suite remains a production follow-up. The in-memory client operation coordinator is intentionally single-process.
+Automated backend and domain coverage is strong. Frontend upload lock/abort/reset behavior is covered mainly through focused state/controller tests rather than full browser interaction tests. Runtime composition is explicit and inspected in tests, while PostgreSQL integration tests cover the durable cross-process epoch and fact revision invariants. The in-memory client operation coordinator remains a same-process latency and duplicate-submission control.
 
 ## Design Principles
 

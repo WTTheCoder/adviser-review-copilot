@@ -6,6 +6,7 @@ type AdviserActionsProps = {
   items: AdviserAction[];
   facts: ClientFact[];
   savingFactId: string | null;
+  disabled?: boolean;
   onDecision: (factId: string, decision: ActionDecision) => void;
 };
 
@@ -38,6 +39,7 @@ export const AdviserActions = ({
   facts,
   items,
   savingFactId,
+  disabled = false,
   onDecision
 }: AdviserActionsProps) => {
   const renderableItems = items.flatMap((item) => {
@@ -54,7 +56,7 @@ export const AdviserActions = ({
       <h2 className="text-lg font-semibold text-slate-950">Adviser actions</h2>
       <div className="mt-4 space-y-4">
         {renderableItems.map(({ item, fact }) => {
-          const isSaving = savingFactId === item.factId;
+          const isSaving = disabled || savingFactId === item.factId;
           const latestDecision = item.latestDecision;
           const presentation = getAdviserActionPresentation(item, fact);
 

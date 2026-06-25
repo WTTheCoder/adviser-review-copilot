@@ -10,12 +10,8 @@ export const prepareAnnualReviewInputSchema = z.object({
   clientId: z.string().min(1)
 });
 
-const createWorkflowRunOutputSchema = z.object({
-  workflowRunId: z.string()
-});
-
-const recordWorkflowStepOutputSchema = z.object({
-  id: z.string()
+const mutationEpochOutputSchema = z.object({
+  mutationEpoch: z.number().int().nonnegative()
 });
 
 const supportedFields = [
@@ -62,44 +58,39 @@ export const prepareAnnualReviewSkill: SkillDefinition<
     "legacy.getSourceRecords",
     "legacy.getFacts",
     "ai.extractCandidateFacts",
-    "review.createWorkflowRun",
-    "review.recordWorkflowStep",
-    "review.applyExtractedCandidateProjection",
-    "review.getPreparedReview"
+    "review.captureClientMutationEpoch",
+    "review.commitPreparedReview"
   ],
   execute: async ({ clientId }, context) => {
+    const preparedWorkflowSteps: Array<{
+      label: string;
+      status: "COMPLETE" | "ESCALATED" | "FAILED";
+      detail: string | null;
+    }> = [];
     const recordStep = async (input: {
       workflowRunId: string;
       sequence: number;
       label: string;
       status?: "COMPLETE" | "ESCALATED" | "FAILED";
       detail?: string | null;
-    }) =>
-      context.toolRegistry.execute(
-        "review.recordWorkflowStep",
-        {
-          workflowRunId: input.workflowRunId,
-          sequence: input.sequence,
-          label: input.label,
-          status: input.status ?? "COMPLETE",
-          detail: input.detail ?? null
-        },
-        prepareAnnualReviewSkill.allowedTools,
-        context,
-        recordWorkflowStepOutputSchema
-      );
+    }) => {
+      preparedWorkflowSteps.push({
+        label: input.label,
+        status: input.status ?? "COMPLETE",
+        detail: input.detail ?? null
+      });
+    };
 
-    const run = await context.toolRegistry.execute(
-      "review.createWorkflowRun",
+    const epoch = await context.toolRegistry.execute(
+      "review.captureClientMutationEpoch",
       {
-        clientId,
-        skillName: prepareAnnualReviewSkill.name,
-        skillVersion: prepareAnnualReviewSkill.version ?? null
+        clientId
       },
       prepareAnnualReviewSkill.allowedTools,
       context,
-      createWorkflowRunOutputSchema
+      mutationEpochOutputSchema
     );
+    const run = { workflowRunId: "pending-atomic-commit" };
 
     let sequence = 1;
     await recordStep(
@@ -210,22 +201,6 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         }
       );
     }
-    await context.toolRegistry.execute(
-      "review.applyExtractedCandidateProjection",
-      {
-        clientId,
-        candidates: classifiedCandidates.map((candidate) => ({
-          field: candidate.field,
-          proposedValue: candidate.proposedValue,
-          applicationStatus: candidate.applicationStatus,
-          sourceRecordId: candidate.sourceRecordId,
-          observedDate: candidate.observedDate
-        }))
-      },
-      prepareAnnualReviewSkill.allowedTools,
-      context,
-      z.object({ applied: z.boolean() })
-    );
     context.recordEvent({
       label: "Application rules classified extracted candidates",
       detail: `${classifiedCandidates.length} candidates require deterministic review handling.`
@@ -273,8 +248,21 @@ export const prepareAnnualReviewSkill: SkillDefinition<
     );
 
     const review = await context.toolRegistry.execute(
-      "review.getPreparedReview",
-      { clientId },
+      "review.commitPreparedReview",
+      {
+        clientId,
+        expectedMutationEpoch: epoch.mutationEpoch,
+        skillName: prepareAnnualReviewSkill.name,
+        skillVersion: prepareAnnualReviewSkill.version ?? null,
+        candidates: classifiedCandidates.map((candidate) => ({
+          field: candidate.field,
+          proposedValue: candidate.proposedValue,
+          applicationStatus: candidate.applicationStatus,
+          sourceRecordId: candidate.sourceRecordId,
+          observedDate: candidate.observedDate
+        })),
+        workflowSteps: preparedWorkflowSteps
+      },
       prepareAnnualReviewSkill.allowedTools,
       context,
       reviewResponseSchema

@@ -1,33 +1,37 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type UploadContext = {
+type ClientMutationContext = {
   clientId: string;
   generation: number;
 };
 
 type ClientOperationState = {
   generation: number;
-  uploadActive: boolean;
-  criticalOperations: number;
-  criticalSection: Promise<void>;
+  pendingOperations: number;
+  queue: Promise<void>;
 };
 
-export class UploadAlreadyInProgressError extends Error {
+type ClientMutationOptions = {
+  rejectIfBusy?: boolean;
+};
+
+export class ClientMutationBusyError extends Error {
   constructor() {
-    super("UPLOAD_ALREADY_IN_PROGRESS");
-    this.name = "UploadAlreadyInProgressError";
+    super("CLIENT_MUTATION_BUSY");
+    this.name = "ClientMutationBusyError";
   }
 }
 
-export class UploadInvalidatedByResetError extends Error {
+export class ClientMutationInvalidatedError extends Error {
   constructor() {
-    super("UPLOAD_INVALIDATED_BY_RESET");
-    this.name = "UploadInvalidatedByResetError";
+    super("CLIENT_MUTATION_INVALIDATED");
+    this.name = "ClientMutationInvalidatedError";
   }
 }
 
 export class ClientOperationCoordinator {
-  private readonly uploadContext = new AsyncLocalStorage<UploadContext>();
+  private readonly mutationContext =
+    new AsyncLocalStorage<ClientMutationContext>();
   private readonly states = new Map<string, ClientOperationState>();
 
   private stateFor(clientId: string) {
@@ -38,9 +42,8 @@ export class ClientOperationCoordinator {
 
     const state: ClientOperationState = {
       generation: 0,
-      uploadActive: false,
-      criticalOperations: 0,
-      criticalSection: Promise.resolve()
+      pendingOperations: 0,
+      queue: Promise.resolve()
     };
     this.states.set(clientId, state);
     return state;
@@ -48,84 +51,82 @@ export class ClientOperationCoordinator {
 
   private releaseIfIdle(clientId: string, state: ClientOperationState) {
     if (
-      !state.uploadActive &&
-      state.criticalOperations === 0 &&
+      state.pendingOperations === 0 &&
       this.states.get(clientId) === state
     ) {
       this.states.delete(clientId);
     }
   }
 
-  private async runCritical<T>(
+  private async runExclusive<T>(
     clientId: string,
-    operation: () => Promise<T>
+    operation: (generation: number) => Promise<T>,
+    options: ClientMutationOptions = {}
   ): Promise<T> {
     const state = this.stateFor(clientId);
-    state.criticalOperations += 1;
-    const previous = state.criticalSection;
+    if (options.rejectIfBusy && state.pendingOperations > 0) {
+      throw new ClientMutationBusyError();
+    }
+
+    state.pendingOperations += 1;
+    const previous = state.queue;
     let release: () => void = () => undefined;
-    state.criticalSection = new Promise<void>((resolve) => {
+    state.queue = new Promise<void>((resolve) => {
       release = resolve;
     });
 
     await previous;
     try {
-      return await operation();
+      return await operation(state.generation);
     } finally {
       release();
-      state.criticalOperations -= 1;
+      state.pendingOperations -= 1;
       this.releaseIfIdle(clientId, state);
     }
   }
 
-  async runUpload<T>(
+  async runClientMutation<T>(
     clientId: string,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    options: ClientMutationOptions = {}
   ): Promise<T> {
-    const state = this.stateFor(clientId);
-    if (state.uploadActive) {
-      throw new UploadAlreadyInProgressError();
-    }
-
-    state.uploadActive = true;
-    const context = {
+    return this.runExclusive(
       clientId,
-      generation: state.generation
-    };
-
-    try {
-      return await this.uploadContext.run(context, operation);
-    } finally {
-      state.uploadActive = false;
-      this.releaseIfIdle(clientId, state);
-    }
+      (generation) =>
+        this.mutationContext.run({ clientId, generation }, operation),
+      options
+    );
   }
 
-  async commitUpload<T>(
+  async commitIfCurrentGeneration<T>(
     clientId: string,
     operation: () => Promise<T>
   ): Promise<T> {
-    const context = this.uploadContext.getStore();
-    if (!context || context.clientId !== clientId) {
-      throw new UploadInvalidatedByResetError();
+    const context = this.mutationContext.getStore();
+    const state = this.states.get(clientId);
+    if (
+      !context ||
+      context.clientId !== clientId ||
+      !state ||
+      state.generation !== context.generation
+    ) {
+      throw new ClientMutationInvalidatedError();
     }
 
-    return this.runCritical(clientId, async () => {
-      if (this.stateFor(clientId).generation !== context.generation) {
-        throw new UploadInvalidatedByResetError();
-      }
-
-      return operation();
-    });
+    return operation();
   }
 
   async runReset<T>(
     clientId: string,
     operation: () => Promise<T>
   ): Promise<T> {
-    return this.runCritical(clientId, async () => {
-      this.stateFor(clientId).generation += 1;
-      return operation();
+    return this.runExclusive(clientId, async () => {
+      const state = this.stateFor(clientId);
+      state.generation += 1;
+      return this.mutationContext.run(
+        { clientId, generation: state.generation },
+        operation
+      );
     });
   }
 

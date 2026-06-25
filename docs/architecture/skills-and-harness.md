@@ -38,8 +38,14 @@ The React app consumes normal API responses and optional execution metadata. It 
 `POST /api/clients/:clientId/facts/:factId/decision` runs `apply-adviser-decision`:
 
 1. Validate skill input and adviser-decision payload.
-2. Apply the decision through backend domain logic.
-3. Return the updated review response with execution metadata.
+2. Read and validate the current unresolved fact inside a database transaction.
+3. Compare-and-swap the exact `ClientFact.revision` being decided.
+4. Persist the adviser decision, fact transition, workflow run, and mandatory audit steps atomically.
+5. Return the updated review response with execution metadata.
+
+Concurrent decisions for the same candidate transition cannot both complete.
+The losing request receives the application-owned `DECISION_CONFLICT` response
+with HTTP 409 and does not create a decision or mutate the fact.
 
 `POST /api/clients/:clientId/source-records/upload` runs `ingest-client-document`:
 
@@ -48,7 +54,7 @@ The React app consumes normal API responses and optional execution metadata. It 
 3. Discriminate TXT/Markdown from PDF using the application-owned request schema.
 4. Validate TXT/Markdown through `document.validateTextUpload`, or validate PDF metadata, binary size, and signature through `document.validatePdfUpload`.
 5. Extract bounded embedded PDF text through `document.extractPdfText`. OCR and filesystem access are not available.
-6. Recheck the upload's per-client generation inside the serialized persistence boundary shared with reset.
+6. Recheck the durable client mutation epoch inside the serialized persistence boundary shared with reset.
 7. Persist one normalized adviser meeting-note source record through `review.createUploadedSourceRecord`.
 8. Return restrained upload metadata without echoing document text or PDF bytes in the execution trace.
 
@@ -74,7 +80,23 @@ The harness rejects unknown skills, invalid skill inputs, invalid skill outputs,
 
 Phase 6B1 document ingestion keeps one fixed route and one fixed skill. PDF parsing is isolated behind an application-owned wrapper around `unpdf`; tools receive in-memory data only, PDF.js string evaluation is disabled, and normalized extracted text is persisted only after all validation succeeds. Password/encryption classification comes from parser behavior, not lexical scans of arbitrary bytes. A 15-second application timeout bounds request waiting but does not provide CPU or memory isolation. Raw PDF bytes are never stored. The browser-supplied filename is display metadata only and is never used as a filesystem path.
 
-Upload requests capture an in-memory per-client operation generation. Reset increments that generation inside the same serialized critical section used immediately before source-record persistence. An older upload therefore either commits before reset and is removed by reseeding, or observes the changed generation and cannot commit afterward. The browser also uses a synchronous submission lock and aborts its active request when reset begins. This coordination is intentionally single-process; horizontally scaled production deployments need database or distributed coordination.
+Uploads, preparation, adviser decisions, and reset use one client-scoped mutation
+coordinator created by the composition root. Mutations for one client are
+serialized while different clients remain independent. Reset waits for active
+mutations and reseeds the complete demo inside one PostgreSQL transaction. The
+database-owned `Client.mutationEpoch` increments during reset without deleting
+the client identity. Decisions, preparation, and uploads capture that epoch
+before long-running work and validate it while locking the client row at commit,
+so stale work is rejected across API processes.
+
+Preparation extraction and validation run outside a database transaction. The
+authoritative candidate projection, review status, workflow run, and mandatory
+workflow steps commit together in one short transaction. Candidate projection
+uses fact revision compare-and-swap and preserves newer adviser decisions.
+`ClientFact.revision` changes only when decision-relevant state changes, so an
+identical deterministic preparation does not invalidate an in-flight decision.
+The browser invalidates every pre-reset preparation, decision, and review
+refresh response and aborts its active upload request.
 
 ## Legacy Adapter Rationale
 

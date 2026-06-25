@@ -4,8 +4,13 @@ import {
   SourceRecordType,
   WorkflowRunStatus
 } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
-import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
+import type {
+  Prisma,
+  PrismaClient,
+  WorkflowStepStatus
+} from "@prisma/client";
 import {
   uploadSourceMetadataSchema,
   type AdviserDecisionPayload,
@@ -34,6 +39,42 @@ export type ExtractedCandidateProjection = {
     | "CANDIDATE_REVIEW";
   sourceRecordId: string;
   observedDate: string;
+};
+
+export class DecisionConflictError extends Error {
+  constructor() {
+    super("DECISION_CONFLICT");
+    this.name = "DecisionConflictError";
+  }
+}
+
+export class ClientMutationConflictError extends Error {
+  constructor() {
+    super("CLIENT_MUTATION_CONFLICT");
+    this.name = "ClientMutationConflictError";
+  }
+}
+
+export class InvalidDecisionForFactError extends Error {
+  constructor() {
+    super("INVALID_DECISION_FOR_FACT");
+    this.name = "InvalidDecisionForFactError";
+  }
+}
+
+export type ReviewServiceHooks = {
+  afterDecisionFactRead?: () => Promise<void>;
+  beforeDecisionAuditWrite?: () => Promise<void>;
+  beforePreparationCommit?: () => Promise<void>;
+  afterPreparationWorkflowRunWrite?: () => Promise<void>;
+  beforeCandidateProjectionWrite?: () => Promise<void>;
+  beforeResetCommit?: () => Promise<void>;
+};
+
+export type PreparedWorkflowStep = {
+  label: string;
+  status: WorkflowStepStatus;
+  detail?: string | null;
 };
 
 const meaningfulChanges = [
@@ -211,7 +252,8 @@ export const buildSummaryMetrics = (
 
 export const createReviewService = (
   client: PrismaClient,
-  clientOperations = new ClientOperationCoordinator()
+  clientOperations = new ClientOperationCoordinator(),
+  hooks: ReviewServiceHooks = {}
 ) => {
   const legacyAdapter = createLegacyCrmAdapter(client);
 
@@ -305,107 +347,276 @@ export const createReviewService = (
     };
   };
 
-  const prepareReview = async (clientId: string) => {
-    await client.$transaction(async (transaction) => {
-      await transaction.workflowRun.deleteMany({ where: { clientId } });
-      await transaction.client.update({
-        where: { id: clientId },
-        data: { reviewStatus: "Ready for adviser review" }
-      });
-      const run = await transaction.workflowRun.create({
-        data: {
-          id: `workflow-${clientId}-${Date.now()}`,
+  const captureClientMutationEpoch = async (clientId: string) => {
+    const clientRecord = await client.client.findUnique({
+      where: { id: clientId },
+      select: { mutationEpoch: true }
+    });
+
+    if (!clientRecord) {
+      throw new Error("CLIENT_NOT_FOUND");
+    }
+
+    return clientRecord.mutationEpoch;
+  };
+
+  const lockClientMutationEpoch = async (
+    transaction: Prisma.TransactionClient,
+    clientId: string,
+    expectedMutationEpoch: number,
+    data: Prisma.ClientUpdateManyMutationInput = {}
+  ) => {
+    const locked = await transaction.client.updateMany({
+      where: {
+        id: clientId,
+        mutationEpoch: expectedMutationEpoch
+      },
+      data: {
+        mutationEpoch: expectedMutationEpoch,
+        ...data
+      }
+    });
+
+    if (locked.count !== 1) {
+      throw new ClientMutationConflictError();
+    }
+  };
+
+  const applyCandidateProjectionInTransaction = async (
+    transaction: Prisma.TransactionClient,
+    clientId: string,
+    candidates: readonly ExtractedCandidateProjection[]
+  ) => {
+    const supportedCandidates = candidates.filter(
+      (candidate) =>
+        candidate.field === "ADDRESS" || candidate.field === "RISK_PROFILE"
+    );
+    const candidatesByField = new Map(
+      supportedCandidates.map((candidate) => [candidate.field, candidate])
+    );
+    const sourceRecord = await transaction.sourceRecord.findFirst({
+      where: {
+        clientId,
+        type: SourceRecordType.ADVISER_MEETING_NOTE
+      },
+      orderBy: { observedAt: "desc" }
+    });
+    const facts = await transaction.clientFact.findMany({
+      where: {
+        clientId,
+        id: {
+          in: Object.values(fieldProjectionTargets).map(
+            (target) => target.factId
+          )
+        }
+      },
+      include: {
+        adviserDecisions: {
+          orderBy: { createdAt: "desc" },
+          take: 1
+        }
+      }
+    });
+
+    await hooks.beforeCandidateProjectionWrite?.();
+
+    for (const fact of facts) {
+      const field =
+        fact.id === fieldProjectionTargets.ADDRESS.factId
+          ? "ADDRESS"
+          : "RISK_PROFILE";
+      const target = fieldProjectionTargets[field];
+      const candidate = candidatesByField.get(field);
+      const latestDecision = fact.adviserDecisions[0] ?? null;
+      const candidateObservedAt = candidate
+        ? toUtcDate(candidate.observedDate)
+        : null;
+      const decisionIsNewerThanEvidence =
+        latestDecision && candidateObservedAt
+          ? latestDecision.createdAt >= candidateObservedAt
+          : false;
+
+      if (decisionIsNewerThanEvidence) {
+        continue;
+      }
+
+      const nextCandidateValue = candidate?.proposedValue ?? null;
+      const nextLifecycleStatus = candidate
+        ? target.status
+        : LifecycleStatus.CURRENT;
+      const nextSourceRecordId = candidate
+        ? candidate.sourceRecordId
+        : sourceRecord?.id ?? fact.sourceRecordId;
+      const decisionStateChanged =
+        fact.candidateValue !== nextCandidateValue ||
+        fact.lifecycleStatus !== nextLifecycleStatus ||
+        (candidate !== undefined &&
+          fact.sourceRecordId !== nextSourceRecordId);
+
+      const updated = await transaction.clientFact.updateMany({
+        where: {
+          id: fact.id,
           clientId,
-          status: WorkflowRunStatus.PREPARED,
-          completedAt: new Date()
+          revision: fact.revision,
+          officialValue: fact.officialValue,
+          candidateValue: fact.candidateValue,
+          lifecycleStatus: fact.lifecycleStatus
+        },
+        data: {
+          candidateValue: nextCandidateValue,
+          lifecycleStatus: nextLifecycleStatus,
+          confidence: candidate ? target.confidence : "Low",
+          sourceRecordId: nextSourceRecordId,
+          observedAt:
+            candidateObservedAt ?? sourceRecord?.observedAt ?? fact.observedAt,
+          explanation: candidate
+            ? target.explanation(candidate.proposedValue)
+            : clearCandidateExplanation(fact.field),
+          ...(decisionStateChanged
+            ? { revision: { increment: 1 } }
+            : {})
         }
       });
-      await transaction.workflowStep.createMany({
-        data: workflowSteps.map((step, index) => ({
-          id: `${run.id}-step-${index + 1}`,
-          workflowRunId: run.id,
-          sequence: index + 1,
-          label: step.label,
-          status: step.status,
-          detail:
-            step.status === "ESCALATED"
-              ? "Address and risk-profile changes need adviser review."
-              : null
-        }))
-      });
-    });
 
-    return buildReviewResponse(clientId);
+      if (updated.count !== 1) {
+        throw new ClientMutationConflictError();
+      }
+    }
   };
 
-  const createWorkflowRun = async (
-    clientId: string,
-    skillName: string,
-    skillVersion: string | null
-  ) => {
-    const versionSuffix = skillVersion ? `-v${skillVersion}` : "";
-    await client.client.update({
-      where: { id: clientId },
-      data: { reviewStatus: "Ready for adviser review" }
-    });
+  const commitPreparedReview = async (input: {
+    clientId: string;
+    expectedMutationEpoch: number;
+    skillName: string;
+    skillVersion: string | null;
+    candidates: readonly ExtractedCandidateProjection[];
+    workflowSteps: readonly PreparedWorkflowStep[];
+  }) => {
+    await hooks.beforePreparationCommit?.();
 
-    return client.workflowRun.create({
-      data: {
-        id: `workflow-${clientId}-${skillName}${versionSuffix}-${Date.now()}`,
-        clientId,
-        status: WorkflowRunStatus.PREPARED,
-        completedAt: new Date()
-      },
-      select: {
-        id: true
-      }
-    });
+    await clientOperations.runClientMutation(input.clientId, () =>
+      client.$transaction(async (transaction) => {
+        await lockClientMutationEpoch(
+          transaction,
+          input.clientId,
+          input.expectedMutationEpoch,
+          { reviewStatus: "Ready for adviser review" }
+        );
+
+        const versionSuffix = input.skillVersion
+          ? `-v${input.skillVersion}`
+          : "";
+        const run = await transaction.workflowRun.create({
+          data: {
+            id: `workflow-${input.clientId}-${input.skillName}${versionSuffix}-${randomUUID()}`,
+            clientId: input.clientId,
+            status: WorkflowRunStatus.PREPARED,
+            completedAt: new Date()
+          }
+        });
+
+        await hooks.afterPreparationWorkflowRunWrite?.();
+        await applyCandidateProjectionInTransaction(
+          transaction,
+          input.clientId,
+          input.candidates
+        );
+        await transaction.workflowStep.createMany({
+          data: input.workflowSteps.map((step, index) => ({
+            id: `${run.id}-step-${index + 1}`,
+            workflowRunId: run.id,
+            sequence: index + 1,
+            label: step.label,
+            status: step.status,
+            detail: step.detail ?? null
+          }))
+        });
+      })
+    );
+
+    return buildReviewResponse(input.clientId);
   };
 
-  const recordWorkflowStep = async (input: {
-    workflowRunId: string;
-    sequence: number;
-    label: string;
-    status: WorkflowStepStatus;
-    detail?: string | null;
-  }) =>
-    client.workflowStep.create({
-      data: {
-        id: `${input.workflowRunId}-step-${input.sequence}`,
-        workflowRunId: input.workflowRunId,
-        sequence: input.sequence,
-        label: input.label,
-        status: input.status,
-        detail: input.detail ?? null
-      },
-      select: {
-        id: true
-      }
+  const prepareReview = async (clientId: string) => {
+    const expectedMutationEpoch = await captureClientMutationEpoch(clientId);
+    return commitPreparedReview({
+      clientId,
+      expectedMutationEpoch,
+      skillName: "prepare-annual-review",
+      skillVersion: "legacy",
+      candidates: [],
+      workflowSteps: workflowSteps.map((step) => ({
+        ...step,
+        detail:
+          step.status === "ESCALATED"
+            ? "Address and risk-profile changes need adviser review."
+            : null
+      }))
     });
+  };
 
   const recordDecision = async (
     clientId: string,
     factId: string,
     payload: AdviserDecisionPayload
   ) => {
-    const fact = await client.clientFact.findFirst({
-      where: { id: factId, clientId }
-    });
-
-    if (!fact) {
-      throw new Error("FACT_NOT_FOUND");
-    }
-
-    if (!isDecisionAllowedForFact(fact, payload.decision)) {
-      throw new Error("INVALID_DECISION_FOR_FACT");
-    }
-
     await client.$transaction(async (transaction) => {
+      const [clientRecord, fact] = await Promise.all([
+        transaction.client.findUnique({
+          where: { id: clientId },
+          select: { mutationEpoch: true }
+        }),
+        transaction.clientFact.findFirst({
+          where: { id: factId, clientId }
+        })
+      ]);
+
+      if (!clientRecord || !fact) {
+        throw new Error("FACT_NOT_FOUND");
+      }
+
+      if (!isDecisionAllowedForFact(fact, payload.decision)) {
+        throw new InvalidDecisionForFactError();
+      }
+
+      await hooks.afterDecisionFactRead?.();
+      try {
+        await lockClientMutationEpoch(
+          transaction,
+          clientId,
+          clientRecord.mutationEpoch
+        );
+      } catch (error) {
+        if (error instanceof ClientMutationConflictError) {
+          throw new DecisionConflictError();
+        }
+        throw error;
+      }
+
       const note = encodeDecisionNote(
         payload.note ??
           `Local demo decision: ${payload.decision}. No production CRM was updated.`,
         fact.candidateValue
       );
+      const factUpdate = applyDecisionToFact(fact, payload.decision);
+      const updated = await transaction.clientFact.updateMany({
+        where: {
+          id: factId,
+          clientId,
+          revision: fact.revision,
+          officialValue: fact.officialValue,
+          candidateValue: fact.candidateValue,
+          lifecycleStatus: fact.lifecycleStatus
+        },
+        data: {
+          ...factUpdate,
+          revision: { increment: 1 }
+        }
+      });
+
+      if (updated.count !== 1) {
+        throw new DecisionConflictError();
+      }
 
       await transaction.adviserDecision.create({
         data: {
@@ -417,10 +628,32 @@ export const createReviewService = (
         }
       });
 
-      const factUpdate = applyDecisionToFact(fact, payload.decision);
-      await transaction.clientFact.update({
-        where: { id: factId },
-        data: factUpdate
+      await hooks.beforeDecisionAuditWrite?.();
+
+      const run = await transaction.workflowRun.create({
+        data: {
+          id: `workflow-${clientId}-apply-adviser-decision-v1-${Date.now()}`,
+          clientId,
+          status: WorkflowRunStatus.PREPARED,
+          completedAt: new Date()
+        }
+      });
+      const decisionSteps = [
+        "Skill selected: apply-adviser-decision",
+        "Skill input validated",
+        "Adviser decision persisted through controlled tool",
+        "Fact state reconciled after adviser decision",
+        "Skill output validated",
+        "Skill completed: apply-adviser-decision"
+      ];
+      await transaction.workflowStep.createMany({
+        data: decisionSteps.map((label, index) => ({
+          id: `${run.id}-step-${index + 1}`,
+          workflowRunId: run.id,
+          sequence: index + 1,
+          label,
+          status: "COMPLETE"
+        }))
       });
     });
 
@@ -430,6 +663,7 @@ export const createReviewService = (
   const persistUploadedSourceRecord = async (input: {
     documentType: "TEXT" | "PDF";
     clientId: string;
+    expectedMutationEpoch: number;
     observedDate: string;
     sourceType: "ADVISER_MEETING_NOTE";
     safeFilename: string;
@@ -445,15 +679,6 @@ export const createReviewService = (
     };
     warnings?: string[];
   }): Promise<DocumentUploadResult> => {
-    const clientRecord = await client.client.findUnique({
-      where: { id: input.clientId },
-      select: { id: true }
-    });
-
-    if (!clientRecord) {
-      throw new Error("CLIENT_NOT_FOUND");
-    }
-
     const uploadedAt = new Date();
     const sourceRecordId = `source-upload-${input.clientId}-${uploadedAt.getTime()}`;
     const upload = uploadSourceMetadataSchema.parse({
@@ -470,23 +695,30 @@ export const createReviewService = (
     });
     const lines = input.text.split("\n");
 
-    await client.sourceRecord.create({
-      data: {
-        id: sourceRecordId,
-        clientId: input.clientId,
-        type: SourceRecordType.ADVISER_MEETING_NOTE,
-        title: `Uploaded: ${input.safeFilename}`,
-        observedAt: toUtcDate(input.observedDate),
-        summary:
-          input.documentType === "PDF"
-            ? `Uploaded text-based PDF (${input.pageCount ?? 0} pages, ${input.characterCount} extracted characters).`
-            : `Uploaded text document (${input.characterCount} characters).`,
-        content: {
-          lines,
-          upload
-        },
-        lifecycleStatus: LifecycleStatus.CURRENT
-      }
+    await client.$transaction(async (transaction) => {
+      await lockClientMutationEpoch(
+        transaction,
+        input.clientId,
+        input.expectedMutationEpoch
+      );
+      await transaction.sourceRecord.create({
+        data: {
+          id: sourceRecordId,
+          clientId: input.clientId,
+          type: SourceRecordType.ADVISER_MEETING_NOTE,
+          title: `Uploaded: ${input.safeFilename}`,
+          observedAt: toUtcDate(input.observedDate),
+          summary:
+            input.documentType === "PDF"
+              ? `Uploaded text-based PDF (${input.pageCount ?? 0} pages, ${input.characterCount} extracted characters).`
+              : `Uploaded text document (${input.characterCount} characters).`,
+          content: {
+            lines,
+            upload
+          },
+          lifecycleStatus: LifecycleStatus.CURRENT
+        }
+      });
     });
 
     return {
@@ -511,7 +743,7 @@ export const createReviewService = (
   const createUploadedSourceRecord = async (
     input: Parameters<typeof persistUploadedSourceRecord>[0]
   ) =>
-    clientOperations.commitUpload(input.clientId, () =>
+    clientOperations.commitIfCurrentGeneration(input.clientId, () =>
       persistUploadedSourceRecord(input)
     );
 
@@ -519,99 +751,36 @@ export const createReviewService = (
     clientId: string,
     candidates: readonly ExtractedCandidateProjection[]
   ) => {
-    const supportedCandidates = candidates.filter(
-      (candidate) =>
-        candidate.field === "ADDRESS" || candidate.field === "RISK_PROFILE"
-    );
-    const candidatesByField = new Map(
-      supportedCandidates.map((candidate) => [candidate.field, candidate])
-    );
+    const expectedMutationEpoch = await captureClientMutationEpoch(clientId);
 
     await client.$transaction(async (transaction) => {
-      const sourceRecord = await transaction.sourceRecord.findFirst({
-        where: {
-          clientId,
-          type: SourceRecordType.ADVISER_MEETING_NOTE
-        },
-        orderBy: { observedAt: "desc" }
-      });
-      const facts = await transaction.clientFact.findMany({
-        where: {
-          clientId,
-          id: {
-            in: Object.values(fieldProjectionTargets).map(
-              (target) => target.factId
-            )
-          }
-        },
-        include: {
-          adviserDecisions: {
-            orderBy: { createdAt: "desc" },
-            take: 1
-          }
-        }
-      });
-
-      for (const fact of facts) {
-        const field =
-          fact.id === fieldProjectionTargets.ADDRESS.factId
-            ? "ADDRESS"
-            : "RISK_PROFILE";
-        const target = fieldProjectionTargets[field];
-        const candidate = candidatesByField.get(field);
-        const latestDecision = fact.adviserDecisions[0] ?? null;
-        const candidateObservedAt = candidate
-          ? toUtcDate(candidate.observedDate)
-          : null;
-        const decisionIsNewerThanEvidence =
-          latestDecision && candidateObservedAt
-            ? latestDecision.createdAt >= candidateObservedAt
-            : false;
-
-        if (decisionIsNewerThanEvidence) {
-          continue;
-        }
-
-        if (candidate) {
-          await transaction.clientFact.update({
-            where: { id: fact.id },
-            data: {
-              candidateValue: candidate.proposedValue,
-              lifecycleStatus: target.status,
-              confidence: target.confidence,
-              sourceRecordId: candidate.sourceRecordId,
-              observedAt: candidateObservedAt ?? fact.observedAt,
-              explanation: target.explanation(candidate.proposedValue)
-            }
-          });
-          continue;
-        }
-
-        await transaction.clientFact.update({
-          where: { id: fact.id },
-          data: {
-            candidateValue: null,
-            lifecycleStatus: LifecycleStatus.CURRENT,
-            confidence: "Low",
-            sourceRecordId: sourceRecord?.id ?? fact.sourceRecordId,
-            observedAt: sourceRecord?.observedAt ?? fact.observedAt,
-            explanation: clearCandidateExplanation(fact.field)
-          }
-        });
-      }
+      await lockClientMutationEpoch(
+        transaction,
+        clientId,
+        expectedMutationEpoch
+      );
+      await applyCandidateProjectionInTransaction(
+        transaction,
+        clientId,
+        candidates
+      );
     });
   };
 
   const resetDemo = async () => {
-    await seedDemoData(client);
+    await client.$transaction(async (transaction) => {
+      await seedDemoData(transaction);
+      await hooks.beforeResetCommit?.();
+    });
     return buildReviewResponse(DEMO_CLIENT_ID);
   };
 
   return {
+    mutationCoordinator: clientOperations,
     buildReviewResponse,
     prepareReview,
-    createWorkflowRun,
-    recordWorkflowStep,
+    captureClientMutationEpoch,
+    commitPreparedReview,
     applyExtractedCandidateProjection,
     createUploadedSourceRecord,
     recordDecision,

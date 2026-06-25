@@ -210,26 +210,25 @@ const createHarness = (
   } satisfies LegacyCrmToolAdapter;
 
   const reviewService = {
-    createWorkflowRun: async () => ({ id: "workflow-1" }),
-    recordWorkflowStep: async (
-      input: Parameters<ReviewToolService["recordWorkflowStep"]>[0]
-    ) => {
-      workflowSteps.push({
-        label: input.label,
-        status: input.status,
-        detail: input.detail ?? null
-      });
-      return { id: `step-${workflowSteps.length}` };
-    },
-    applyExtractedCandidateProjection: async (_clientId, candidates) => {
+    captureClientMutationEpoch: async () => 0,
+    commitPreparedReview: async (input) => {
+      workflowSteps.splice(
+        0,
+        workflowSteps.length,
+        ...input.workflowSteps.map((step) => ({
+          label: step.label,
+          status: step.status,
+          detail: step.detail ?? null
+        }))
+      );
       const address = review.clientFacts.find((fact) => fact.id === "fact-address");
       const risk = review.clientFacts.find(
         (fact) => fact.id === "fact-risk-profile"
       );
-      const extractedAddress = candidates.find(
+      const extractedAddress = input.candidates.find(
         (candidate) => candidate.field === "ADDRESS"
       );
-      const extractedRisk = candidates.find(
+      const extractedRisk = input.candidates.find(
         (candidate) => candidate.field === "RISK_PROFILE"
       );
 
@@ -248,6 +247,12 @@ const createHarness = (
           : "CURRENT";
         risk.status = extractedRisk ? "Requires adviser approval" : "Current";
       }
+
+      return {
+        ...review,
+        summaryMetrics: buildSummaryMetrics(review),
+        workflowTrace: workflowSteps
+      };
     },
     createUploadedSourceRecord: async (input) => ({
       status: "stored",
@@ -324,10 +329,27 @@ const createHarness = (
         fact.status = "Current";
       }
 
+      workflowSteps.splice(
+        0,
+        workflowSteps.length,
+        ...[
+          "Skill selected: apply-adviser-decision",
+          "Skill input validated",
+          "Adviser decision persisted through controlled tool",
+          "Fact state reconciled after adviser decision",
+          "Skill output validated",
+          "Skill completed: apply-adviser-decision"
+        ].map((label) => ({
+          label,
+          status: "COMPLETE" as const,
+          detail: null
+        }))
+      );
+
       return {
         ...review,
         summaryMetrics: buildSummaryMetrics(review),
-        workflowTrace: review.workflowTrace
+        workflowTrace: workflowSteps
       };
     }
   } satisfies ReviewToolService;
@@ -436,6 +458,7 @@ describe("required skills", () => {
     expect(result.metadata.events.map((event) => event.label)).toEqual([
       "Skill selected: ingest-client-document",
       "Skill input validated",
+      "Tool invoked: review.captureClientMutationEpoch",
       "Upload metadata validated",
       "Tool invoked: document.validateTextUpload",
       "Text upload validated",
@@ -620,9 +643,8 @@ describe("required skills", () => {
       ReturnType<ReviewToolService["createUploadedSourceRecord"]>
     >;
     const invalidToolOutputService = {
-      createWorkflowRun: async () => ({ id: "workflow-1" }),
-      recordWorkflowStep: async () => ({ id: "step-1" }),
-      applyExtractedCandidateProjection: async () => undefined,
+      captureClientMutationEpoch: async () => 0,
+      commitPreparedReview: async () => review,
       createUploadedSourceRecord: async () => invalidUploadResponse,
       buildReviewResponse: async () => review,
       recordDecision: async () => {

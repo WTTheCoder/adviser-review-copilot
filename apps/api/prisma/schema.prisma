@@ -45,6 +45,7 @@ model Client {
   adviserName      String
   reviewYear       Int
   reviewStatus     String
+  mutationEpoch    Int               @default(0)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   sourceRecords    SourceRecord[]
@@ -81,6 +82,7 @@ model ClientFact {
   confidence       String
   lifecycleStatus  LifecycleStatus
   explanation      String
+  revision         Int               @default(0)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   client           Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)

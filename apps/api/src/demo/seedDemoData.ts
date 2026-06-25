@@ -4,7 +4,7 @@ import {
   WorkflowRunStatus,
   WorkflowStepStatus
 } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 export const DEMO_CLIENT_ID = "demo-alex-taylor";
 
@@ -150,7 +150,36 @@ export const workflowSteps = [
   }
 ] as const;
 
-export const seedDemoData = async (client: PrismaClient) => {
+export const seedDemoData = async (client: Prisma.TransactionClient) => {
+  const existingClient = await client.client.findUnique({
+    where: { id: DEMO_CLIENT_ID },
+    select: { id: true }
+  });
+
+  if (existingClient) {
+    await client.client.update({
+      where: { id: DEMO_CLIENT_ID },
+      data: {
+        name: "Alex Taylor",
+        adviserName: "Jordan Lee",
+        reviewYear: 2026,
+        reviewStatus: "Preparation in progress",
+        mutationEpoch: { increment: 1 }
+      }
+    });
+  } else {
+    await client.client.create({
+      data: {
+        id: DEMO_CLIENT_ID,
+        name: "Alex Taylor",
+        adviserName: "Jordan Lee",
+        reviewYear: 2026,
+        reviewStatus: "Preparation in progress",
+        mutationEpoch: 0
+      }
+    });
+  }
+
   await client.adviserDecision.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
@@ -162,19 +191,6 @@ export const seedDemoData = async (client: PrismaClient) => {
   });
   await client.sourceRecord.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
-  });
-  await client.client.deleteMany({
-    where: { id: DEMO_CLIENT_ID }
-  });
-
-  await client.client.create({
-    data: {
-      id: DEMO_CLIENT_ID,
-      name: "Alex Taylor",
-      adviserName: "Jordan Lee",
-      reviewYear: 2026,
-      reviewStatus: "Preparation in progress"
-    }
   });
 
   for (const sourceRecord of sourceRecords) {
