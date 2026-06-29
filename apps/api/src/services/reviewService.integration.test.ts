@@ -45,11 +45,12 @@ const deferred = () => {
 };
 
 const riskCandidate = (
-  proposedValue = "High Growth"
+  proposedValue = "High Growth",
+  evidence = `Evidence for ${proposedValue}`
 ): ExtractedCandidateProjection => ({
   field: "RISK_PROFILE",
   proposedValue,
-  evidence: `Evidence for ${proposedValue}`,
+  evidence,
   applicationStatus: "REQUIRES_ADVISER_APPROVAL",
   sourceRecordId: "source-meeting-note",
   observedDate: "2026-06-04"
@@ -324,11 +325,17 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
       await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
 
     await commitPreparation(service, expectedMutationEpoch, [
-      riskCandidate("Growth-oriented")
+      riskCandidate(
+        "Growth-oriented",
+        "Alex is considering a more growth-oriented investment approach."
+      )
     ]);
     const firstRevision = (await factState("fact-risk-profile")).revision;
     await commitPreparation(service, expectedMutationEpoch, [
-      riskCandidate("Growth-oriented")
+      riskCandidate(
+        "Growth-oriented",
+        "Alex is considering a more growth-oriented investment approach."
+      )
     ]);
 
     expect(firstRevision).toBe(0);
