@@ -38,7 +38,7 @@ export const createLegacyCrmAdapter = (client: PrismaClient) => ({
         candidateSourceRecord: true,
         adviserDecisions: {
           orderBy: { createdAt: "desc" },
-          take: 1
+          take: 5
         }
       },
       orderBy: { createdAt: "asc" }

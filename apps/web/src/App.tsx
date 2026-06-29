@@ -21,6 +21,7 @@ import {
   clearUploadTrace,
   replaceUploadTrace
 } from "./domain/uploadTraceState.js";
+import { parseDecisionResponse } from "./domain/decisionResponse.js";
 import {
   getPrepareButtonLabel,
   getPrimaryExtractionWarning,
@@ -39,6 +40,7 @@ export const App = () => {
   const [reviewPhase, setReviewPhase] = useState<ReviewPhase>("ready");
   const [selectedFact, setSelectedFact] = useState<ClientFact | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [savingFactId, setSavingFactId] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [latestUploadTrace, setLatestUploadTrace] =
@@ -91,6 +93,7 @@ export const App = () => {
 
     const loadReview = async () => {
       setLoadError(null);
+      setNoticeMessage(null);
 
       try {
         const response = await fetch(
@@ -114,6 +117,7 @@ export const App = () => {
           setLoadError(
             "Review data is unavailable. Check that the API and local PostgreSQL database are running."
           );
+          setNoticeMessage(null);
         }
       }
     };
@@ -148,7 +152,8 @@ export const App = () => {
               ? "prepared"
               : "ready"
           );
-          setLoadError(successMessage);
+          setLoadError(null);
+          setNoticeMessage(successMessage);
         }
       );
     } catch {
@@ -158,6 +163,7 @@ export const App = () => {
           setLoadError(
             "Review data is unavailable. Check that the API and local PostgreSQL database are running."
           );
+          setNoticeMessage(null);
         }
       );
     }
@@ -167,6 +173,7 @@ export const App = () => {
     const operationGeneration = clientOperationGeneration.current.capture();
     setReviewPhase("preparing");
     setLoadError(null);
+    setNoticeMessage(null);
 
     try {
       const response = await fetch(
@@ -184,6 +191,7 @@ export const App = () => {
         () => {
           setReviewData(preparedReview);
           setReviewPhase("prepared");
+          setNoticeMessage(null);
         }
       );
     } catch {
@@ -194,6 +202,7 @@ export const App = () => {
           setLoadError(
             "Review preparation failed. Check that the API and database are available."
           );
+          setNoticeMessage(null);
         }
       );
     }
@@ -207,6 +216,7 @@ export const App = () => {
     const operationGeneration = clientOperationGeneration.current.capture();
     setSavingFactId(factId);
     setLoadError(null);
+    setNoticeMessage(null);
 
     try {
       const payload = adviserDecisionPayloadSchema.parse({
@@ -234,12 +244,19 @@ export const App = () => {
         throw new Error("Could not save decision.");
       }
 
-      const updatedReview = reviewResponseSchema.parse(await response.json());
+      const parsedDecision = parseDecisionResponse(await response.json());
       clientOperationGeneration.current.applyIfCurrent(
         operationGeneration,
         () => {
-          setReviewData(updatedReview);
+          if (parsedDecision.kind === "refreshRequired") {
+            setNoticeMessage(parsedDecision.message);
+            setReviewPhase("prepared");
+            return;
+          }
+
+          setReviewData(parsedDecision.review);
           setReviewPhase("prepared");
+          setNoticeMessage(null);
         }
       );
     } catch {
@@ -249,6 +266,7 @@ export const App = () => {
           setLoadError(
             "The adviser decision could not be saved. No production CRM was updated."
           );
+          setNoticeMessage(null);
         }
       );
     } finally {
@@ -265,6 +283,7 @@ export const App = () => {
     setIsResetting(true);
     setSavingFactId(null);
     setLoadError(null);
+    setNoticeMessage(null);
     setUploadPanelResetToken((current) => current + 1);
 
     try {
@@ -282,6 +301,7 @@ export const App = () => {
         setReviewPhase("ready");
         setSelectedFact(null);
         setLatestUploadTrace(clearUploadTrace());
+        setNoticeMessage(null);
       });
     } catch {
       clientOperationGeneration.current.applyIfCurrent(resetGeneration, () => {
@@ -291,6 +311,7 @@ export const App = () => {
             : "ready"
         );
         setLoadError("The local demo reset failed. Check the API and database.");
+        setNoticeMessage(null);
       });
     } finally {
       clientOperationGeneration.current.applyIfCurrent(
@@ -385,6 +406,12 @@ export const App = () => {
           {loadError ? (
             <div className="rounded border border-rose-200 bg-rose-50 p-5 text-sm leading-6 text-rose-800">
               {loadError}
+            </div>
+          ) : null}
+
+          {noticeMessage ? (
+            <div className="rounded border border-cyan-200 bg-cyan-50 p-5 text-sm leading-6 text-cyan-900">
+              {noticeMessage}
             </div>
           ) : null}
 

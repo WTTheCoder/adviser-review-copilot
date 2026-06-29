@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  DecisionMutationResult,
   DocumentUploadResult,
   ExecutionTraceMetadata,
   ReviewResponse
@@ -55,6 +56,13 @@ const uploadResponse: DocumentUploadResult = {
   characterCount: 32,
   byteCount: 32,
   ingestionStatus: "validated"
+};
+
+const decisionResponse: DecisionMutationResult = {
+  committed: true,
+  refreshRequired: false,
+  review,
+  message: null
 };
 
 const createTestServer = async () => {
@@ -118,7 +126,11 @@ const createTestServer = async () => {
       async (skillName) => ({
         ok: true,
         output:
-          skillName === "ingest-client-document" ? uploadResponse : review,
+          skillName === "ingest-client-document"
+            ? uploadResponse
+            : skillName === "apply-adviser-decision"
+              ? decisionResponse
+              : review,
         metadata:
           skillName === "ingest-client-document"
             ? uploadExecutionMetadata
@@ -200,6 +212,45 @@ describe("review routes", () => {
       expect.anything(),
       "demo-alex-taylor"
     );
+    await server.close();
+  });
+
+  it("returns a committed refresh-required response when decision readback fails", async () => {
+    const { server, harness } = await createTestServer();
+    harness.execute.mockResolvedValueOnce({
+      ok: true,
+      output: {
+        committed: true,
+        refreshRequired: true,
+        review: null,
+        message: "Decision was saved. Refresh to load the latest review."
+      },
+      metadata: {
+        skillName: "apply-adviser-decision",
+        skillVersion: "1",
+        status: "SUCCEEDED",
+        events: []
+      }
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/facts/fact-address/decision",
+      payload: { decision: "CONFIRM" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      committed: true,
+      refreshRequired: true,
+      review: null,
+      message: "Decision was saved. Refresh to load the latest review.",
+      executionMetadata: {
+        skillName: "apply-adviser-decision",
+        skillVersion: "1",
+        status: "SUCCEEDED"
+      }
+    });
     await server.close();
   });
 

@@ -29,6 +29,12 @@ const resetCanonicalData = () =>
 const factState = (factId: string) =>
   primary.clientFact.findUniqueOrThrow({ where: { id: factId } });
 
+const latestDecision = (factId: string) =>
+  primary.adviserDecision.findFirstOrThrow({
+    where: { factId },
+    orderBy: { createdAt: "desc" }
+  });
+
 const clientEpoch = () =>
   primary.client
     .findUniqueOrThrow({
@@ -373,9 +379,11 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     ]);
     expect((await factState("fact-risk-profile")).revision).toBe(1);
 
-    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+    const result = await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
       decision: DecisionType.APPROVE
     });
+    expect(result.refreshRequired).toBe(false);
+    expect(result.review?.client.id).toBe(DEMO_CLIENT_ID);
     expect((await factState("fact-risk-profile")).revision).toBe(2);
   });
 
@@ -516,6 +524,135 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
       candidateSourceRecordId: null,
       candidateObservedAt: null,
       candidateEvidence: null
+    });
+    expect(await latestDecision("fact-risk-profile")).toMatchObject({
+      decisionType: DecisionType.APPROVE,
+      actor: "demo-adviser",
+      candidateValue: "High Growth",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateEvidence: "Evidence for High Growth",
+      officialValueBefore: "Balanced",
+      officialSourceRecordIdBefore: "source-annual-review",
+      officialObservedAtBefore: new Date("2025-11-16T00:00:00.000Z"),
+      resultingOfficialValue: "High Growth",
+      resultingOfficialSourceRecordId: "source-meeting-note",
+      resultingOfficialObservedAt: new Date("2026-06-04T00:00:00.000Z")
+    });
+  });
+
+  it("returns committed refresh-required when post-commit decision readback fails", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator(),
+      {
+        beforeDecisionResponseRead: async () => {
+          throw new Error("forced response read failure");
+        }
+      }
+    );
+
+    const result = await service.recordDecision(
+      DEMO_CLIENT_ID,
+      "fact-risk-profile",
+      { decision: DecisionType.APPROVE }
+    );
+
+    expect(result).toEqual({
+      committed: true,
+      refreshRequired: true,
+      review: null,
+      message: "Decision was saved. Refresh to load the latest review."
+    });
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "Growth-oriented",
+      previousValue: "Balanced",
+      candidateValue: null,
+      lifecycleStatus: LifecycleStatus.CURRENT,
+      revision: 1
+    });
+    expect(await latestDecision("fact-risk-profile")).toMatchObject({
+      decisionType: DecisionType.APPROVE,
+      candidateValue: "Growth-oriented",
+      candidateEvidence:
+        "Alex is considering a more growth-oriented investment approach.",
+      resultingOfficialValue: "Growth-oriented"
+    });
+    expect(
+      await primary.workflowRun.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(2);
+    expect(
+      await primary.workflowStep.count({
+        where: {
+          workflowRun: {
+            clientId: DEMO_CLIENT_ID
+          }
+        }
+      })
+    ).toBe(14);
+  });
+
+  it("preserves KEEP_CURRENT candidate evidence in the decision snapshot after clearing active state", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.KEEP_CURRENT
+    });
+
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "Balanced",
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null,
+      candidateEvidence: null
+    });
+    expect(await latestDecision("fact-risk-profile")).toMatchObject({
+      decisionType: DecisionType.KEEP_CURRENT,
+      actor: "demo-adviser",
+      candidateValue: "Growth-oriented",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateEvidence:
+        "Alex is considering a more growth-oriented investment approach.",
+      officialValueBefore: "Balanced",
+      officialSourceRecordIdBefore: "source-annual-review",
+      officialObservedAtBefore: new Date("2025-11-16T00:00:00.000Z"),
+      resultingOfficialValue: "Balanced",
+      resultingOfficialSourceRecordId: "source-annual-review",
+      resultingOfficialObservedAt: new Date("2025-11-16T00:00:00.000Z")
+    });
+  });
+
+  it("preserves LEAVE_UNVERIFIED candidate evidence in the decision snapshot after clearing active state", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-address", {
+      decision: DecisionType.LEAVE_UNVERIFIED
+    });
+
+    expect(await factState("fact-address")).toMatchObject({
+      officialValue: "East Perth",
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null,
+      candidateEvidence: null
+    });
+    expect(await latestDecision("fact-address")).toMatchObject({
+      decisionType: DecisionType.LEAVE_UNVERIFIED,
+      actor: "demo-adviser",
+      candidateValue: "Subiaco",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateEvidence:
+        "Alex may have moved to Subiaco, but the address has not been confirmed.",
+      officialValueBefore: "East Perth",
+      resultingOfficialValue: "East Perth"
     });
   });
 

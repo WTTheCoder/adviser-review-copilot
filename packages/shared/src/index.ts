@@ -299,6 +299,29 @@ export const clientFactSchema = z.object({
   memoryExplanation: z.string()
 });
 
+export const adviserDecisionSnapshotSchema = z.object({
+  decision: decisionTypeSchema,
+  actor: z.string().nullable().optional(),
+  note: z.string().nullable(),
+  candidateValue: z.string().nullable().optional(),
+  candidateSourceRecordId: z.string().nullable().optional(),
+  candidateSourceDocument: z.string().nullable().optional(),
+  candidateObservedAt: z.string().nullable().optional(),
+  candidateObservedDate: z.string().nullable().optional(),
+  candidateEvidence: z.string().nullable().optional(),
+  officialValueBefore: z.string().nullable().optional(),
+  officialSourceRecordIdBefore: z.string().nullable().optional(),
+  officialSourceDocumentBefore: z.string().nullable().optional(),
+  officialObservedAtBefore: z.string().nullable().optional(),
+  officialObservedDateBefore: z.string().nullable().optional(),
+  resultingOfficialValue: z.string().nullable().optional(),
+  resultingOfficialSourceRecordId: z.string().nullable().optional(),
+  resultingOfficialSourceDocument: z.string().nullable().optional(),
+  resultingOfficialObservedAt: z.string().nullable().optional(),
+  resultingOfficialObservedDate: z.string().nullable().optional(),
+  createdAt: z.string()
+});
+
 export const adviserActionSchema = z.object({
   id: z.enum(["confirm-address", "review-risk-profile"]),
   factId: z.string(),
@@ -310,14 +333,8 @@ export const adviserActionSchema = z.object({
   secondaryDecision: decisionTypeSchema,
   primaryLabel: z.string(),
   secondaryLabel: z.string(),
-  latestDecision: z
-    .object({
-      decision: decisionTypeSchema,
-      note: z.string().nullable(),
-      candidateValue: z.string().nullable().optional(),
-      createdAt: z.string()
-    })
-    .nullable()
+  latestDecision: adviserDecisionSnapshotSchema.nullable(),
+  decisionHistory: z.array(adviserDecisionSnapshotSchema).optional()
 });
 
 export const reviewResponseSchema = z.object({
@@ -349,6 +366,24 @@ export const reviewResponseSchema = z.object({
   extractionMetadata: extractionMetadataSchema.optional()
 });
 
+export const decisionMutationResultSchema = z.discriminatedUnion(
+  "refreshRequired",
+  [
+    z.object({
+      committed: z.literal(true),
+      refreshRequired: z.literal(false),
+      review: reviewResponseSchema,
+      message: z.string().nullable()
+    }),
+    z.object({
+      committed: z.literal(true),
+      refreshRequired: z.literal(true),
+      review: z.null(),
+      message: z.string().min(1).max(240)
+    })
+  ]
+);
+
 export type LifecycleStatus = z.infer<typeof lifecycleStatusSchema>;
 export type DecisionType = z.infer<typeof decisionTypeSchema>;
 export type ExecutionEventStatus = z.infer<typeof executionEventStatusSchema>;
@@ -359,9 +394,15 @@ export type AdviserDecisionPayload = z.infer<
   typeof adviserDecisionPayloadSchema
 >;
 export type ReviewResponse = z.infer<typeof reviewResponseSchema>;
+export type DecisionMutationResult = z.infer<
+  typeof decisionMutationResultSchema
+>;
 export type SourceRecordDto = z.infer<typeof sourceRecordSchema>;
 export type ClientFactDto = z.infer<typeof clientFactSchema>;
 export type AdviserActionDto = z.infer<typeof adviserActionSchema>;
+export type AdviserDecisionSnapshotDto = z.infer<
+  typeof adviserDecisionSnapshotSchema
+>;
 export type ExtractionMetadata = z.infer<typeof extractionMetadataSchema>;
 export type DocumentUploadRequest = z.infer<typeof documentUploadRequestSchema>;
 export type DocumentUploadResult = z.infer<typeof documentUploadResultSchema>;

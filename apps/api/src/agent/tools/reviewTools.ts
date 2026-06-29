@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   adviserDecisionPayloadSchema,
+  decisionMutationResultSchema,
   documentUploadResultSchema,
   reviewResponseSchema
 } from "@client-review-prep/shared";
@@ -146,12 +147,12 @@ export const createReviewTools = (
 
   const applyDecision: ToolDefinition<
     typeof applyDecisionInputSchema,
-    typeof reviewResponseSchema
+    typeof decisionMutationResultSchema
   > = {
     name: "review.applyDecision",
     description: "Persist an adviser decision using deterministic domain rules.",
     inputSchema: applyDecisionInputSchema,
-    outputSchema: reviewResponseSchema,
+    outputSchema: decisionMutationResultSchema,
     risk: "HIGH",
     execute: async ({ clientId, factId, payload }) => {
       try {

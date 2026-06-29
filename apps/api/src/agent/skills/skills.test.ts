@@ -482,9 +482,14 @@ const createHarness = (
       );
 
       return {
+        committed: true,
+        refreshRequired: false,
+        message: null,
+        review: {
         ...review,
         summaryMetrics: buildSummaryMetrics(review),
         workflowTrace: workflowSteps
+        }
       };
     }
   } satisfies ReviewToolService;

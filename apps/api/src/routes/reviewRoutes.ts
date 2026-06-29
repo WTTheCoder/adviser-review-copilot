@@ -1,5 +1,6 @@
 import {
   adviserDecisionPayloadSchema,
+  decisionMutationResultSchema,
   documentUploadResultSchema,
   documentUploadErrorResponseSchema,
   documentUploadRequestSchema,
@@ -8,7 +9,7 @@ import {
   type ReviewResponse,
   reviewResponseSchema
 } from "@client-review-prep/shared";
-import type { z } from "zod";
+import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ExecutionResult } from "../agent/harness/executionResult.js";
 import { DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
@@ -70,6 +71,11 @@ const withExecutionMetadata = (
       status: result.metadata.status
     }
   });
+
+const applyDecisionRouteResponseSchema = z.union([
+  reviewResponseSchema,
+  decisionMutationResultSchema
+]);
 
 export const registerReviewRoutes = async (
   server: FastifyInstance,
@@ -139,7 +145,7 @@ export const registerReviewRoutes = async (
               factId,
               payload: payloadResult.data
             },
-            reviewResponseSchema,
+            applyDecisionRouteResponseSchema,
             clientId
           )
       );
@@ -154,7 +160,29 @@ export const registerReviewRoutes = async (
           });
       }
 
-      return withExecutionMetadata(result);
+      if ("refreshRequired" in result.output && result.output.refreshRequired) {
+        return {
+          ...result.output,
+          executionMetadata: {
+            skillName: result.metadata.skillName,
+            skillVersion: result.metadata.skillVersion,
+            status: result.metadata.status
+          }
+        };
+      }
+
+      const review = "refreshRequired" in result.output
+        ? result.output.review
+        : result.output;
+
+      return reviewResponseSchema.parse({
+        ...review,
+        executionMetadata: {
+          skillName: result.metadata.skillName,
+          skillVersion: result.metadata.skillVersion,
+          status: result.metadata.status
+        }
+      });
     }
   );
 

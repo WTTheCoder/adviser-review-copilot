@@ -14,7 +14,9 @@ import type {
 import {
   uploadSourceMetadataSchema,
   type AdviserDecisionPayload,
+  type AdviserDecisionSnapshotDto,
   type ClientFactDto,
+  type DecisionMutationResult,
   type DocumentUploadResult,
   type ReviewResponse,
   type SourceRecordDto
@@ -66,6 +68,7 @@ export class InvalidDecisionForFactError extends Error {
 export type ReviewServiceHooks = {
   afterDecisionFactRead?: () => Promise<void>;
   beforeDecisionAuditWrite?: () => Promise<void>;
+  beforeDecisionResponseRead?: () => Promise<void>;
   beforePreparationCommit?: () => Promise<void>;
   afterPreparationWorkflowRunWrite?: () => Promise<void>;
   beforeCandidateProjectionWrite?: () => Promise<void>;
@@ -202,6 +205,10 @@ const clearCandidateExplanation = (field: string) =>
 
 type LegacyAdapter = ReturnType<typeof createLegacyCrmAdapter>;
 
+const demoDecisionActor = "demo-adviser";
+const decisionSavedRefreshMessage =
+  "Decision was saved. Refresh to load the latest review.";
+
 export type FactForReview = {
   id: string;
   field: string;
@@ -232,8 +239,68 @@ export type FactForReview = {
   adviserDecisions: Array<{
     decisionType: DecisionType;
     note: string | null;
+    actor: string | null;
+    candidateValue: string | null;
+    candidateSourceRecordId: string | null;
+    candidateObservedAt: Date | null;
+    candidateEvidence: string | null;
+    officialValueBefore: string | null;
+    officialSourceRecordIdBefore: string | null;
+    officialObservedAtBefore: Date | null;
+    resultingOfficialValue: string | null;
+    resultingOfficialSourceRecordId: string | null;
+    resultingOfficialObservedAt: Date | null;
     createdAt: Date;
   }>;
+};
+
+const mapDecisionSnapshot = (
+  decision: FactForReview["adviserDecisions"][number],
+  sourceTitleById: ReadonlyMap<string, string>
+): AdviserDecisionSnapshotDto => {
+  const candidateValue =
+    decision.candidateValue ?? decodeDecisionCandidateValue(decision.note);
+  const candidateSourceDocument = decision.candidateSourceRecordId
+    ? sourceTitleById.get(decision.candidateSourceRecordId) ?? null
+    : null;
+  const officialSourceDocumentBefore = decision.officialSourceRecordIdBefore
+    ? sourceTitleById.get(decision.officialSourceRecordIdBefore) ?? null
+    : null;
+  const resultingOfficialSourceDocument =
+    decision.resultingOfficialSourceRecordId
+      ? sourceTitleById.get(decision.resultingOfficialSourceRecordId) ?? null
+      : null;
+
+  return {
+    decision: decision.decisionType,
+    actor: decision.actor,
+    note: decision.note,
+    candidateValue,
+    candidateSourceRecordId: decision.candidateSourceRecordId,
+    candidateSourceDocument,
+    candidateObservedAt: decision.candidateObservedAt?.toISOString() ?? null,
+    candidateObservedDate: decision.candidateObservedAt
+      ? formatDate(decision.candidateObservedAt)
+      : null,
+    candidateEvidence: decision.candidateEvidence,
+    officialValueBefore: decision.officialValueBefore,
+    officialSourceRecordIdBefore: decision.officialSourceRecordIdBefore,
+    officialSourceDocumentBefore,
+    officialObservedAtBefore:
+      decision.officialObservedAtBefore?.toISOString() ?? null,
+    officialObservedDateBefore: decision.officialObservedAtBefore
+      ? formatDate(decision.officialObservedAtBefore)
+      : null,
+    resultingOfficialValue: decision.resultingOfficialValue,
+    resultingOfficialSourceRecordId: decision.resultingOfficialSourceRecordId,
+    resultingOfficialSourceDocument,
+    resultingOfficialObservedAt:
+      decision.resultingOfficialObservedAt?.toISOString() ?? null,
+    resultingOfficialObservedDate: decision.resultingOfficialObservedAt
+      ? formatDate(decision.resultingOfficialObservedAt)
+      : null,
+    createdAt: decision.createdAt.toISOString()
+  };
 };
 
 export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
@@ -338,6 +405,9 @@ export const createReviewService = (
       lifecycleStatus: record.lifecycleStatus,
       upload: contentToUpload(record.content)
     }));
+    const sourceTitleById = new Map(
+      sourceRecordDtos.map((record) => [record.id, record.title])
+    );
 
     const factDtos: ClientFactDto[] = facts.map(mapFactToDto);
     const meaningfulChangeItems = buildMeaningfulChanges(facts);
@@ -358,6 +428,9 @@ export const createReviewService = (
       meaningfulChanges: meaningfulChangeItems,
       adviserActions: actionFacts.map((fact) => {
         const latestDecision = fact.adviserDecisions[0] ?? null;
+        const decisionHistory = fact.adviserDecisions.map((decision) =>
+          mapDecisionSnapshot(decision, sourceTitleById)
+        );
         const isAddress = fact.id === "fact-address";
         return {
           id: isAddress ? "confirm-address" : "review-risk-profile",
@@ -377,15 +450,9 @@ export const createReviewService = (
           primaryLabel: isAddress ? "Confirm" : "Approve",
           secondaryLabel: isAddress ? "Leave unverified" : "Keep current",
           latestDecision: latestDecision
-            ? {
-                decision: latestDecision.decisionType,
-                note: latestDecision.note,
-                candidateValue: decodeDecisionCandidateValue(
-                  latestDecision.note
-                ),
-                createdAt: latestDecision.createdAt.toISOString()
-              }
-            : null
+            ? mapDecisionSnapshot(latestDecision, sourceTitleById)
+            : null,
+          decisionHistory
         };
       }),
       workflowTrace:
@@ -601,7 +668,7 @@ export const createReviewService = (
     clientId: string,
     factId: string,
     payload: AdviserDecisionPayload
-  ) => {
+  ): Promise<DecisionMutationResult> => {
     await client.$transaction(async (transaction) => {
       const [clientRecord, fact] = await Promise.all([
         transaction.client.findUnique({
@@ -644,18 +711,20 @@ export const createReviewService = (
       const promotesCandidate =
         payload.decision === DecisionType.CONFIRM ||
         payload.decision === DecisionType.APPROVE;
+      const resultingOfficialSourceRecordId = promotesCandidate
+        ? fact.candidateSourceRecordId ?? fact.officialSourceRecordId
+        : fact.officialSourceRecordId;
+      const resultingOfficialObservedAt = promotesCandidate
+        ? fact.candidateObservedAt ?? fact.officialObservedAt
+        : fact.officialObservedAt;
       const provenanceUpdate = promotesCandidate
         ? {
             previousSourceRecordId: fact.officialSourceRecordId,
             previousObservedAt: fact.officialObservedAt,
-            officialSourceRecordId:
-              fact.candidateSourceRecordId ?? fact.officialSourceRecordId,
-            officialObservedAt:
-              fact.candidateObservedAt ?? fact.officialObservedAt,
-            sourceRecordId:
-              fact.candidateSourceRecordId ?? fact.officialSourceRecordId,
-            observedAt:
-              fact.candidateObservedAt ?? fact.officialObservedAt,
+            officialSourceRecordId: resultingOfficialSourceRecordId,
+            officialObservedAt: resultingOfficialObservedAt,
+            sourceRecordId: resultingOfficialSourceRecordId,
+            observedAt: resultingOfficialObservedAt,
             candidateSourceRecordId: null,
             candidateObservedAt: null,
             candidateEvidence: null
@@ -691,7 +760,18 @@ export const createReviewService = (
           clientId,
           factId,
           decisionType: payload.decision,
-          note
+          note,
+          actor: demoDecisionActor,
+          candidateValue: fact.candidateValue,
+          candidateSourceRecordId: fact.candidateSourceRecordId,
+          candidateObservedAt: fact.candidateObservedAt,
+          candidateEvidence: fact.candidateEvidence,
+          officialValueBefore: fact.officialValue,
+          officialSourceRecordIdBefore: fact.officialSourceRecordId,
+          officialObservedAtBefore: fact.officialObservedAt,
+          resultingOfficialValue: factUpdate.officialValue,
+          resultingOfficialSourceRecordId,
+          resultingOfficialObservedAt
         }
       });
 
@@ -724,7 +804,22 @@ export const createReviewService = (
       });
     });
 
-    return buildReviewResponse(clientId);
+    try {
+      await hooks.beforeDecisionResponseRead?.();
+      return {
+        committed: true,
+        refreshRequired: false,
+        review: await buildReviewResponse(clientId),
+        message: null
+      };
+    } catch {
+      return {
+        committed: true,
+        refreshRequired: true,
+        review: null,
+        message: decisionSavedRefreshMessage
+      };
+    }
   };
 
   const persistUploadedSourceRecord = async (input: {
