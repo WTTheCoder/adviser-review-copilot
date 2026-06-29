@@ -1,10 +1,10 @@
-# Client Review Prep Agent Demo
+# Adviser Review Copilot Demo
 
 All names and records in this walkthrough are fictional.
 
 ## 30-Second Pitch
 
-Client Review Prep Agent helps financial advisers prepare annual reviews from fragmented CRM records and client documents. AI can identify evidence-backed candidate changes, but it cannot silently overwrite official facts. Address and risk-profile changes stay under adviser control, with their sources, decisions, and execution trace visible.
+Adviser Review Copilot helps financial advisers prepare client reviews from fragmented CRM records, prior review data, meeting notes, and client documents. AI can identify evidence-backed candidate changes, but deterministic rules validate and reconcile the proposals before an adviser confirms or approves anything. Source provenance, execution traces, and durable decision history stay visible.
 
 ## 3-Minute Demo
 
@@ -26,13 +26,15 @@ Client Review Prep Agent helps financial advisers prepare annual reviews from fr
 
 - **Skills:** typed workflows coordinate context loading, ingestion, review preparation, reconciliation, and adviser decisions.
 - **Allowlisted tools:** each skill can call only registered operations appropriate to that workflow.
-- **Legacy adapter:** CRM access is isolated behind a backend boundary rather than spread through routes or UI code.
+- **Legacy adapter:** simulated CRM access is isolated behind a backend boundary rather than spread through routes or UI code.
 - **Document ingestion:** TXT, Markdown, and text-based PDF inputs are validated, bounded, normalized, and stored as source records. Raw PDF bytes are not retained.
 - **Extraction modes:** deterministic mock mode supports repeatable offline demos; optional OpenAI Responses API mode implements the same candidate contract.
-- **Candidate facts:** extracted values remain proposals. Backend domain rules own canonicalization, lifecycle state, metrics, and promotion.
+- **Candidate facts:** extracted values remain proposals. Trusted application code attaches provenance, then deterministic rules own canonicalization, lifecycle state, metrics, and promotion.
+- **Contradiction handling:** same-field contradictions are withheld with warnings rather than chosen by array order.
 - **Human approval:** address changes require confirmation and risk-profile changes require approval.
+- **Decision history:** KEEP_CURRENT and LEAVE_UNVERIFIED clear active candidate state, but the durable decision snapshot retains candidate value, source, evidence, official-before state, result, actor, and timestamp.
 - **Auditability:** evidence, source attribution, skill execution metadata, workflow steps, and persisted adviser decisions survive refresh.
-- **Security boundaries:** request and document limits, safe error mapping, plain-text display, tool allowlists, and reset/upload coordination constrain the prototype. PDF parsing is timed out but not process-isolated.
+- **Security boundaries:** request and document limits, safe error mapping, plain-text display, tool allowlists, trusted provenance attachment, and reset/upload coordination constrain the prototype. PDF parsing is timed out but not process-isolated.
 
 ## Failure Recovery
 
@@ -43,6 +45,10 @@ Set `POSTGRES_PORT` and `DATABASE_URL` as shown in the README, run `npm run db:u
 ### API Is Disconnected
 
 Confirm `npm run dev` is still running, open `http://localhost:3001/health`, and verify `VITE_API_BASE_URL` has not been set to a different API URL.
+
+### Decision Was Saved But The Review Did Not Refresh
+
+If the app shows that the decision was saved and asks you to refresh, reload the page. The mutation has committed; the message means the post-commit readback failed.
 
 ### Reset Fails
 

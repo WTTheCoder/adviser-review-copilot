@@ -1,119 +1,117 @@
-# Controlled Skills and Execution Harness
+# Controlled Skills And Execution Harness
 
-The deterministic execution layer for the Client Review Prep Agent prepares adviser-facing reviews without giving model-provider code direct access to the database or unrestricted backend functions.
+The deterministic execution layer for Adviser Review Copilot prepares client reviews without giving model-provider code direct database access or unrestricted backend functions.
 
 ## Dependency Direction
 
 ```text
-server.ts / application runtime composition
+application runtime composition
 -> Fastify routes
 -> ExecutionHarness
 -> SkillRegistry
 -> SkillDefinition
 -> ToolRegistry
 -> ToolDefinition
--> CandidateFactExtractor
 -> services and adapters
 -> Prisma/PostgreSQL
 ```
 
-The composition root constructs the Prisma-backed review service, AI extractor, legacy adapter, registries, tools, skills, and harness before injecting route dependencies. Routes choose a known skill name and pass request data into the injected harness. Skills can only use tools listed in their `allowedTools`. Tools are the only harness-facing layer that calls services, adapters, or the candidate-fact extractor.
+The composition root constructs the Prisma-backed review service, AI extractor, legacy adapter, registries, tools, skills, and harness before injecting route dependencies. Routes choose known skill names and pass request data into the injected harness. Skills can call only the tools listed in their `allowedTools`. Tools are the harness-facing layer that calls services, adapters, and the candidate extractor.
 
-The React app consumes normal API responses and optional execution metadata. It does not call skills or tools directly.
+The React app consumes API responses and execution metadata. It does not call skills or tools directly.
 
-## Execution Sequence
+## Fixed Public Routes
 
-`POST /api/clients/:clientId/prepare-review` runs `prepare-annual-review`:
+The API exposes fixed workflow routes rather than an arbitrary public skill endpoint:
+
+- `POST /api/clients/:clientId/prepare-review`
+- `POST /api/clients/:clientId/facts/:factId/decision`
+- `POST /api/clients/:clientId/source-records/upload`
+- `POST /api/demo/reset`
+
+Public callers cannot submit arbitrary skill names, tool names, SQL, provider prompts, or filesystem paths.
+
+## Review Preparation
+
+`prepare-annual-review` remains the internal skill name for compatibility. It performs a generic client-review preparation workflow:
 
 1. Validate skill input.
-2. Create a persisted workflow run.
-3. Load client context through legacy CRM tools.
+2. Capture the durable `Client.mutationEpoch`.
+3. Load client, source records, and facts through legacy CRM tools.
 4. Extract candidate facts through the controlled model boundary.
-5. Classify extracted candidates through application rules.
-6. Replace the current preparation candidate projection without promoting official values.
-7. Reconcile facts deterministically.
-8. Persist execution-trace steps.
-9. Return the prepared review response with execution and extraction metadata.
+5. Attach trusted source provenance in application code.
+6. Reconcile duplicate, contradictory, stale, unsupported, and official-supporting assertions.
+7. Commit the candidate projection, review status, workflow run, and workflow steps in one transaction.
+8. Return the prepared review response with execution and extraction metadata.
 
-`POST /api/clients/:clientId/facts/:factId/decision` runs `apply-adviser-decision`:
+Candidate projection uses explicit official/candidate provenance and `ClientFact.revision` compare-and-swap. Reprocessing identical evidence is idempotent.
 
-1. Validate skill input and adviser-decision payload.
-2. Read and validate the current unresolved fact inside a database transaction.
-3. Compare-and-swap the exact `ClientFact.revision` being decided.
-4. Persist the adviser decision, fact transition, workflow run, and mandatory audit steps atomically.
-5. Return the updated review response with execution metadata.
+## Adviser Decisions
 
-Concurrent decisions for the same candidate transition cannot both complete.
-The losing request receives the application-owned `DECISION_CONFLICT` response
-with HTTP 409 and does not create a decision or mutate the fact.
+`apply-adviser-decision` persists address confirmation, address leave-unverified, risk-profile approval, and risk-profile keep-current decisions.
 
-`POST /api/clients/:clientId/source-records/upload` runs `ingest-client-document`:
+Inside one PostgreSQL transaction it:
 
-1. Reject JSON bodies over the application-owned Fastify route limit before decoding or skill execution.
+1. Reads the unresolved fact.
+2. Validates the requested decision against the fact type and lifecycle.
+3. Locks the durable `Client.mutationEpoch`.
+4. Updates the fact using `ClientFact.revision` compare-and-swap.
+5. Writes an `AdviserDecision` row with a structured immutable snapshot.
+6. Writes the workflow run and mandatory workflow steps.
+
+The decision snapshot stores candidate value, candidate source, candidate observed date, candidate evidence, official state before, resulting official state, actor (`demo-adviser` in this demo), and timestamp. KEEP_CURRENT and LEAVE_UNVERIFIED can clear active candidate state because the candidate and evidence remain in the durable snapshot.
+
+After the transaction commits, the service attempts to build a refreshed review response. If that post-commit refresh fails, the API reports a committed success with `refreshRequired: true` and a reload message. It does not imply rollback and does not repeat the mutation automatically.
+
+Concurrent decisions for the same candidate transition cannot both complete. The losing request receives the application-owned `DECISION_CONFLICT` response with HTTP 409 and does not create a decision or mutate the fact.
+
+## Document Upload
+
+`ingest-client-document` handles one `.txt`, `.md`, or text-based `.pdf` source:
+
+1. Reject route bodies over the configured limit before decoding.
 2. Validate the fixed route payload against the shared upload schema.
-3. Discriminate TXT/Markdown from PDF using the application-owned request schema.
-4. Validate TXT/Markdown through `document.validateTextUpload`, or validate PDF metadata, binary size, and signature through `document.validatePdfUpload`.
-5. Extract bounded embedded PDF text through `document.extractPdfText`. OCR and filesystem access are not available.
-6. Recheck the durable client mutation epoch inside the serialized persistence boundary shared with reset.
-7. Persist one normalized adviser meeting-note source record through `review.createUploadedSourceRecord`.
-8. Return restrained upload metadata without echoing document text or PDF bytes in the execution trace.
+3. Validate TXT/Markdown text or PDF metadata, binary size, and signature.
+4. Extract bounded embedded PDF text through the application-owned wrapper around `unpdf`.
+5. Recheck `Client.mutationEpoch` inside the serialized persistence boundary.
+6. Persist one normalized adviser meeting-note source record.
+7. Return restrained metadata without echoing document text or PDF bytes in the execution trace.
 
-The upload route does not expose arbitrary skill names, arbitrary tool names, server filesystem reads, or model-controlled file access.
+PDF parsing is in-memory and timeout-bounded, but not process-isolated. Raw PDF bytes are never stored. Browser filenames are display metadata only and are never used as filesystem paths.
 
-## Skill and Tool Boundaries
+## Reset, Mutation Epoch, And Revision Controls
+
+Uploads, preparation, adviser decisions, and reset use one client-scoped mutation coordinator in the API process. Durable database checks remain authoritative:
+
+- reset reseeds the complete demo inside one PostgreSQL transaction;
+- `Client.mutationEpoch` invalidates stale upload, preparation, and decision work after reset;
+- `ClientFact.revision` protects fact updates with compare-and-swap;
+- preparation, reset, and decision rollback tests verify that partial audit or workflow writes do not survive failed transactions.
+
+The in-memory coordinator reduces same-process overlap, but it is not a distributed lock.
+
+## Skill And Tool Contracts
 
 Every skill declares:
 
-- Name and optional version.
-- Zod input and output schemas.
-- Explicit allowed tool names.
-- Deterministic execute function.
+- name and optional version;
+- Zod input and output schemas;
+- explicit allowed tool names;
+- deterministic execute function.
 
 Every tool declares:
 
-- Name.
-- Zod input and output schemas.
-- Risk label.
-- Narrow execute function.
+- name;
+- Zod input and output schemas;
+- risk label;
+- narrow execute function.
 
 The harness rejects unknown skills, invalid skill inputs, invalid skill outputs, invalid tool inputs, invalid tool outputs, unknown tools, and tools outside the current skill allowlist.
 
-Phase 6B1 document ingestion keeps one fixed route and one fixed skill. PDF parsing is isolated behind an application-owned wrapper around `unpdf`; tools receive in-memory data only, PDF.js string evaluation is disabled, and normalized extracted text is persisted only after all validation succeeds. Password/encryption classification comes from parser behavior, not lexical scans of arbitrary bytes. A 15-second application timeout bounds request waiting but does not provide CPU or memory isolation. Raw PDF bytes are never stored. The browser-supplied filename is display metadata only and is never used as a filesystem path.
-
-Uploads, preparation, adviser decisions, and reset use one client-scoped mutation
-coordinator created by the composition root. Mutations for one client are
-serialized while different clients remain independent. Reset waits for active
-mutations and reseeds the complete demo inside one PostgreSQL transaction. The
-database-owned `Client.mutationEpoch` increments during reset without deleting
-the client identity. Decisions, preparation, and uploads capture that epoch
-before long-running work and validate it while locking the client row at commit,
-so stale work is rejected across API processes.
-
-Preparation extraction and validation run outside a database transaction. The
-authoritative candidate projection, review status, workflow run, and mandatory
-workflow steps commit together in one short transaction. Candidate projection
-uses fact revision compare-and-swap and preserves newer adviser decisions.
-`ClientFact.revision` changes only when decision-relevant state changes, so an
-identical deterministic preparation does not invalidate an in-flight decision.
-The browser invalidates every pre-reset preparation, decision, and review
-refresh response and aborts its active upload request.
-
 ## Legacy Adapter Rationale
 
-The legacy CRM adapter simulates fragmented source systems while keeping the prototype deterministic. It gives future controlled skills a realistic backend boundary to operate through without exposing UI code to legacy-system details.
-
-## Model Provider Boundary
-
-Phase 5 model extraction operates through the registered `ai.extractCandidateFacts` tool and returns schema-validated candidate facts. Future model integrations should continue to select from registered skills or provide validated inputs to registered skills. Model-provider code must not call Prisma, database clients, or arbitrary services directly.
-
-This keeps the future agent surface auditable:
-
-- The set of callable skills is explicit.
-- Each skill has a declared output contract.
-- Each skill can only call allowlisted tools.
-- Tool calls are validated and recordable.
-- Errors returned to API consumers are safe and do not expose stack traces.
+The legacy CRM adapter simulates fragmented source systems while keeping the prototype deterministic. It gives controlled skills a realistic backend boundary without spreading legacy-system details through routes or UI code.
 
 ## Trade-offs
 
-This layer adds some ceremony around a small model boundary. The benefit is a clear contract for agentic behavior and a small blast radius for future changes. Current tests remain deterministic so behavior can be covered without network calls, secrets, or model availability. Phase 6B2 should move complex or hostile PDF parsing to isolated asynchronous workers with process and memory limits; the current timeout only stops the API from waiting indefinitely.
+This layer adds ceremony around a small model and workflow boundary. The benefit is a small blast radius for future agentic behavior: skills are explicit, tool access is allowlisted, outputs are validated, and errors returned to API consumers are safe. Production work would still need authentication, distributed coordination, isolated document-processing workers, live-model evaluation, and operational monitoring.

@@ -362,17 +362,17 @@ export const App = () => {
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-wide text-cyan-700">
-                Client Review Prep Agent
+                Adviser Review Copilot
               </p>
               <h1 className="mt-2 text-3xl font-semibold tracking-normal text-slate-950 sm:text-4xl">
-                Source-backed preparation for adviser annual reviews
+                Source-backed preparation for client reviews
               </h1>
               <div className="mt-5 flex flex-wrap gap-3 text-sm text-slate-700">
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">
                   {reviewData?.client.name ?? "Alex Taylor"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  {reviewData ? `${reviewData.client.reviewYear} Annual Review` : "2026 Annual Review"}
+                  {reviewData ? `${reviewData.client.reviewYear} Client Review` : "2026 Client Review"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
                   Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
