@@ -23,6 +23,7 @@ import {
 } from "./domain/uploadTraceState.js";
 import {
   getPrepareButtonLabel,
+  getPrimaryExtractionWarning,
   getReviewStatusLabel,
   type ReviewPhase
 } from "./domain/reviewWorkflow.js";
@@ -318,7 +319,9 @@ export const App = () => {
       ? `Extraction: OpenAI - ${reviewData.extractionMetadata.model ?? "configured model"}`
       : "Extraction: Mock"
     : null;
-  const extractionWarning = reviewData?.extractionMetadata?.warnings[0] ?? null;
+  const extractionWarning = getPrimaryExtractionWarning(
+    reviewData?.extractionMetadata?.warnings
+  );
   const currentSelectedFact =
     selectedFact && reviewData
       ? reviewData.clientFacts.find((fact) => fact.id === selectedFact.id) ??

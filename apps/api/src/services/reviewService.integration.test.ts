@@ -2,6 +2,7 @@ import {
   DecisionType,
   LifecycleStatus,
   PrismaClient,
+  SourceRecordType,
   WorkflowStepStatus
 } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
@@ -66,6 +67,20 @@ const addressCandidate = (
   sourceRecordId: "source-meeting-note",
   observedDate: "2026-06-04"
 });
+
+const createObservedSourceRecord = (id: string, observedAt: string) =>
+  primary.sourceRecord.create({
+    data: {
+      id,
+      clientId: DEMO_CLIENT_ID,
+      type: SourceRecordType.ADVISER_MEETING_NOTE,
+      title: `Adviser Meeting Note ${id}`,
+      observedAt: new Date(`${observedAt}T00:00:00.000Z`),
+      summary: "Integration test source record.",
+      content: [`Observed ${observedAt}`],
+      lifecycleStatus: LifecycleStatus.CURRENT
+    }
+  });
 
 const preparationSteps = [
   {
@@ -501,6 +516,108 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
       candidateSourceRecordId: null,
       candidateObservedAt: null,
       candidateEvidence: null
+    });
+  });
+
+  it("projects a candidate from a newer source even after a recent approval decision", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const initialEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, initialEpoch, [
+      riskCandidate("High Growth")
+    ]);
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.APPROVE
+    });
+    await createObservedSourceRecord("source-newer-note", "2026-06-20");
+    const postApprovalEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, postApprovalEpoch, [
+      {
+        ...riskCandidate("Conservative"),
+        sourceRecordId: "source-newer-note",
+        observedDate: "2026-06-20"
+      }
+    ]);
+
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "High Growth",
+      officialSourceRecordId: "source-meeting-note",
+      officialObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateValue: "Conservative",
+      candidateSourceRecordId: "source-newer-note",
+      candidateObservedAt: new Date("2026-06-20T00:00:00.000Z")
+    });
+  });
+
+  it("does not project a candidate from an older source than the current official provenance", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const initialEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, initialEpoch, [
+      riskCandidate("High Growth")
+    ]);
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.APPROVE
+    });
+    const postApprovalEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, postApprovalEpoch, [
+      {
+        ...riskCandidate("Conservative"),
+        sourceRecordId: "source-annual-review",
+        observedDate: "2025-11-16"
+      }
+    ]);
+
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "High Growth",
+      officialSourceRecordId: "source-meeting-note",
+      officialObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null
+    });
+  });
+
+  it("does not project a conflicting candidate from the same source date as official provenance", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const initialEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, initialEpoch, [
+      riskCandidate("High Growth")
+    ]);
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.APPROVE
+    });
+    const postApprovalEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, postApprovalEpoch, [
+      riskCandidate("Conservative")
+    ]);
+
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "High Growth",
+      officialSourceRecordId: "source-meeting-note",
+      officialObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null
     });
   });
 

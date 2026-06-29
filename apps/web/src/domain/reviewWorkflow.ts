@@ -10,3 +10,7 @@ export const getPrepareButtonLabel = (phase: ReviewPhase): string => {
 
   return phase === "prepared" ? "Re-run Preparation" : "Prepare Client Review";
 };
+
+export const getPrimaryExtractionWarning = (
+  warnings: readonly string[] | null | undefined
+) => warnings?.[0] ?? null;

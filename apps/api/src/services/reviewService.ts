@@ -161,6 +161,25 @@ const contentToUpload = (content: unknown): SourceRecordDto["upload"] => {
 const toUtcDate = (calendarDate: string) =>
   new Date(`${calendarDate}T00:00:00.000Z`);
 
+const compareDates = (first: Date | null, second: Date | null) => {
+  if (!first || !second) {
+    return null;
+  }
+
+  const firstTime = first.getTime();
+  const secondTime = second.getTime();
+
+  if (firstTime < secondTime) {
+    return -1;
+  }
+
+  if (firstTime > secondTime) {
+    return 1;
+  }
+
+  return 0;
+};
+
 const fieldProjectionTargets = {
   ADDRESS: {
     factId: "fact-address",
@@ -451,16 +470,15 @@ export const createReviewService = (
           : "RISK_PROFILE";
       const target = fieldProjectionTargets[field];
       const candidate = candidatesByField.get(field);
-      const latestDecision = fact.adviserDecisions[0] ?? null;
       const candidateObservedAt = candidate
         ? toUtcDate(candidate.observedDate)
         : null;
-      const decisionIsNewerThanEvidence =
-        latestDecision && candidateObservedAt
-          ? latestDecision.createdAt >= candidateObservedAt
+      const candidateIsNewerThanOfficial =
+        candidate && candidateObservedAt
+          ? compareDates(candidateObservedAt, fact.officialObservedAt) === 1
           : false;
 
-      if (decisionIsNewerThanEvidence) {
+      if (candidate && !candidateIsNewerThanOfficial) {
         continue;
       }
 

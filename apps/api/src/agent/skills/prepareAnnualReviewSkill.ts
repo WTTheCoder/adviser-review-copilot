@@ -3,7 +3,7 @@ import { reviewResponseSchema } from "@client-review-prep/shared";
 import { candidateFactExtractionResultSchema } from "../../ai/contracts/candidateFactSchemas.js";
 import {
   attachTrustedCandidateProvenance,
-  classifyCandidateFactsWithDiagnostics
+  reconcileCandidateFactsWithDiagnostics
 } from "../../ai/contracts/candidateFactReviewRules.js";
 import type { SkillDefinition } from "./skillTypes.js";
 import { loadClientContextSkill } from "./loadClientContextSkill.js";
@@ -25,6 +25,37 @@ const supportedFields = [
   "ANNUAL_INCOME",
   "SUPERANNUATION"
 ] as const;
+
+const supportedFieldForFact = (fact: {
+  id: string;
+  field: string;
+}): (typeof supportedFields)[number] | null => {
+  if (fact.id === "fact-address" || fact.field === "Address") {
+    return "ADDRESS";
+  }
+
+  if (fact.id === "fact-risk-profile" || fact.field === "Risk profile") {
+    return "RISK_PROFILE";
+  }
+
+  if (fact.field === "Financial goal") {
+    return "FINANCIAL_GOAL";
+  }
+
+  if (fact.field === "Employment") {
+    return "EMPLOYMENT";
+  }
+
+  if (fact.field === "Annual income") {
+    return "ANNUAL_INCOME";
+  }
+
+  if (fact.field === "Superannuation") {
+    return "SUPERANNUATION";
+  }
+
+  return null;
+};
 
 const extractionTraceLabel = (extraction: {
   providerMode: "mock" | "openai";
@@ -195,8 +226,21 @@ export const prepareAnnualReviewSkill: SkillDefinition<
           observedDate: meetingNote.observedAt.slice(0, 10)
         })
       : [];
-    const classification = classifyCandidateFactsWithDiagnostics(
-      trustedCandidates
+    const classification = reconcileCandidateFactsWithDiagnostics(
+      trustedCandidates,
+      loadedContext.existingFacts.flatMap((fact) => {
+        const field = supportedFieldForFact(fact);
+
+        return field
+          ? [
+              {
+                field,
+                officialValue: fact.officialValue,
+                officialObservedAt: fact.officialObservedAt
+              }
+            ]
+          : [];
+      })
     );
     const classifiedCandidates = classification.classifications;
     if (classification.warnings.length > 0) {
@@ -204,7 +248,7 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         {
           workflowRunId: run.workflowRunId,
           sequence: sequence++,
-          label: "Unsupported extracted candidates omitted",
+          label: "Extracted candidates reconciled with official facts",
           status: "ESCALATED",
           detail: classification.warnings.join(" ")
         }
@@ -284,7 +328,7 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         providerMode: extraction.providerMode,
         model: extraction.model,
         candidateCount: extraction.candidateFacts.length,
-        warnings: extraction.warnings
+        warnings: [...extraction.warnings, ...classification.warnings]
       }
     };
   }

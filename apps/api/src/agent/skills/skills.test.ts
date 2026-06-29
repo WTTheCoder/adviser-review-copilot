@@ -22,6 +22,7 @@ import {
   createReviewTools,
   type ReviewToolService
 } from "../tools/reviewTools.js";
+import type { FactForReview } from "../../services/reviewService.js";
 import { createDocumentTools } from "../tools/documentTools.js";
 import { MockCandidateFactExtractor } from "../../ai/providers/mockCandidateFactExtractor.js";
 import type {
@@ -82,6 +83,45 @@ const buildSummaryMetrics = (review: ReviewResponse) => {
 
 const metricValue = (review: ReviewResponse, label: string) =>
   review.summaryMetrics.find((metric) => metric.label === label)?.value;
+
+const legacyFactsForReview = (review: ReviewResponse): FactForReview[] =>
+  review.clientFacts.map((fact) => ({
+    id: fact.id,
+    field: fact.field,
+    officialValue: fact.officialValue,
+    candidateValue: fact.candidateValue,
+    previousValue: fact.previousValue,
+    sourceRecordId: fact.sourceRecordId,
+    observedAt: new Date(fact.observedAt),
+    officialSourceRecordId: fact.officialSourceRecordId,
+    officialObservedAt: new Date(fact.officialObservedAt),
+    previousSourceRecordId: fact.previousSourceRecordId,
+    previousObservedAt: fact.previousObservedAt
+      ? new Date(fact.previousObservedAt)
+      : null,
+    candidateSourceRecordId: fact.candidateSourceRecordId,
+    candidateObservedAt: fact.candidateObservedAt
+      ? new Date(fact.candidateObservedAt)
+      : null,
+    candidateEvidence: fact.candidateEvidence,
+    confidence: fact.confidence,
+    lifecycleStatus: fact.lifecycleStatus,
+    explanation: fact.memoryExplanation,
+    officialSourceRecord: {
+      title: fact.officialSourceDocument
+    },
+    previousSourceRecord: fact.previousSourceDocument
+      ? {
+          title: fact.previousSourceDocument
+        }
+      : null,
+    candidateSourceRecord: fact.candidateSourceDocument
+      ? {
+          title: fact.candidateSourceDocument
+        }
+      : null,
+    adviserDecisions: []
+  }));
 
 const createReview = (): ReviewResponse => ({
   client: {
@@ -232,7 +272,7 @@ const createHarness = (
         lifecycleStatus: "CURRENT"
       }
     ],
-    getLegacyFacts: async () => []
+    getLegacyFacts: async () => legacyFactsForReview(review)
   } satisfies LegacyCrmToolAdapter;
 
   const reviewService = {
@@ -879,6 +919,87 @@ describe("required skills", () => {
     ).toBe("2");
   });
 
+  it("withholds live contradictory risk-profile evidence instead of projecting a candidate", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult(
+          [
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Alex is considering High Growth."
+            },
+            {
+              ...createCandidateFact("RISK_PROFILE", "Balanced"),
+              evidence: "Alex has decided to remain Balanced."
+            }
+          ],
+          "openai"
+        )
+    });
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk?.officialValue).toBe("Balanced");
+    expect(risk?.candidateValue).toBeNull();
+    expect(risk?.lifecycleStatus).toBe("CURRENT");
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings.join(" ") : ""
+    ).toContain("conflicting evidence also supports the current official value");
+    expect(
+      result.ok
+        ? result.output.workflowTrace.some((step) =>
+            step.label.includes("Extracted candidates reconciled with official facts")
+          )
+        : false
+    ).toBe(true);
+  });
+
+  it("merges duplicate live assertions before projecting a supported candidate", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult(
+          [
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Client may move to High Growth."
+            },
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Client is considering High Growth."
+            }
+          ],
+          "openai"
+        )
+    });
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk).toMatchObject({
+      officialValue: "Balanced",
+      candidateValue: "High Growth",
+      candidateEvidence:
+        "Client is considering High Growth. | Client may move to High Growth.",
+      lifecycleStatus: "REQUIRES_ADVISER_APPROVAL"
+    });
+    expect(result.ok ? result.output.extractionMetadata?.warnings : null).toEqual([]);
+  });
+
   it("resolves Joondalup and High Growth with existing metric semantics", async () => {
     const { harness } = createHarness({
       extract: async () =>
@@ -1041,7 +1162,7 @@ describe("required skills", () => {
     expect(
       result.ok
         ? result.output.workflowTrace.some((step) =>
-            step.label.includes("Unsupported extracted candidates omitted")
+            step.label.includes("Extracted candidates reconciled with official facts")
           )
         : false
     ).toBe(true);
