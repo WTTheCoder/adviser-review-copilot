@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { reviewResponseSchema } from "@client-review-prep/shared";
 import { candidateFactExtractionResultSchema } from "../../ai/contracts/candidateFactSchemas.js";
-import { classifyCandidateFactsWithDiagnostics } from "../../ai/contracts/candidateFactReviewRules.js";
+import {
+  attachTrustedCandidateProvenance,
+  classifyCandidateFactsWithDiagnostics
+} from "../../ai/contracts/candidateFactReviewRules.js";
 import type { SkillDefinition } from "./skillTypes.js";
 import { loadClientContextSkill } from "./loadClientContextSkill.js";
 import { reconcileClientFacts } from "./reconcileClientFactsSkill.js";
@@ -186,8 +189,14 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         label: "Validated structured extraction output"
       }
     );
+    const trustedCandidates = meetingNote
+      ? attachTrustedCandidateProvenance(extraction.candidateFacts, {
+          sourceRecordId: meetingNote.id,
+          observedDate: meetingNote.observedAt.slice(0, 10)
+        })
+      : [];
     const classification = classifyCandidateFactsWithDiagnostics(
-      extraction.candidateFacts
+      trustedCandidates
     );
     const classifiedCandidates = classification.classifications;
     if (classification.warnings.length > 0) {
@@ -257,6 +266,7 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         candidates: classifiedCandidates.map((candidate) => ({
           field: candidate.field,
           proposedValue: candidate.proposedValue,
+          evidence: candidate.evidence,
           applicationStatus: candidate.applicationStatus,
           sourceRecordId: candidate.sourceRecordId,
           observedDate: candidate.observedDate

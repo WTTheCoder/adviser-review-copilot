@@ -33,6 +33,7 @@ import {
 export type ExtractedCandidateProjection = {
   field: "ADDRESS" | "RISK_PROFILE" | "FINANCIAL_GOAL" | "EMPLOYMENT" | "ANNUAL_INCOME" | "SUPERANNUATION";
   proposedValue: string;
+  evidence: string;
   applicationStatus:
     | "NEEDS_CONFIRMATION"
     | "REQUIRES_ADVISER_APPROVAL"
@@ -190,12 +191,25 @@ export type FactForReview = {
   previousValue: string | null;
   sourceRecordId: string;
   observedAt: Date;
+  officialSourceRecordId: string;
+  officialObservedAt: Date;
+  previousSourceRecordId: string | null;
+  previousObservedAt: Date | null;
+  candidateSourceRecordId: string | null;
+  candidateObservedAt: Date | null;
+  candidateEvidence: string | null;
   confidence: string;
   lifecycleStatus: LifecycleStatus;
   explanation: string;
-  sourceRecord: {
+  officialSourceRecord: {
     title: string;
   };
+  previousSourceRecord: {
+    title: string;
+  } | null;
+  candidateSourceRecord: {
+    title: string;
+  } | null;
   adviserDecisions: Array<{
     decisionType: DecisionType;
     note: string | null;
@@ -211,10 +225,27 @@ export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
   officialValue: fact.officialValue,
   candidateValue: fact.candidateValue,
   previousValue: fact.previousValue,
-  sourceRecordId: fact.sourceRecordId,
-  sourceDocument: fact.sourceRecord.title,
-  observedAt: fact.observedAt.toISOString(),
-  observedDate: formatDate(fact.observedAt),
+  sourceRecordId: fact.officialSourceRecordId,
+  sourceDocument: fact.officialSourceRecord.title,
+  observedAt: fact.officialObservedAt.toISOString(),
+  observedDate: formatDate(fact.officialObservedAt),
+  officialSourceRecordId: fact.officialSourceRecordId,
+  officialSourceDocument: fact.officialSourceRecord.title,
+  officialObservedAt: fact.officialObservedAt.toISOString(),
+  officialObservedDate: formatDate(fact.officialObservedAt),
+  previousSourceRecordId: fact.previousSourceRecordId,
+  previousSourceDocument: fact.previousSourceRecord?.title ?? null,
+  previousObservedAt: fact.previousObservedAt?.toISOString() ?? null,
+  previousObservedDate: fact.previousObservedAt
+    ? formatDate(fact.previousObservedAt)
+    : null,
+  candidateSourceRecordId: fact.candidateSourceRecordId,
+  candidateSourceDocument: fact.candidateSourceRecord?.title ?? null,
+  candidateObservedAt: fact.candidateObservedAt?.toISOString() ?? null,
+  candidateObservedDate: fact.candidateObservedAt
+    ? formatDate(fact.candidateObservedAt)
+    : null,
+  candidateEvidence: fact.candidateEvidence,
   confidence:
     fact.confidence === "High" || fact.confidence === "Medium"
       ? fact.confidence
@@ -394,13 +425,6 @@ export const createReviewService = (
     const candidatesByField = new Map(
       supportedCandidates.map((candidate) => [candidate.field, candidate])
     );
-    const sourceRecord = await transaction.sourceRecord.findFirst({
-      where: {
-        clientId,
-        type: SourceRecordType.ADVISER_MEETING_NOTE
-      },
-      orderBy: { observedAt: "desc" }
-    });
     const facts = await transaction.clientFact.findMany({
       where: {
         clientId,
@@ -444,14 +468,14 @@ export const createReviewService = (
       const nextLifecycleStatus = candidate
         ? target.status
         : LifecycleStatus.CURRENT;
-      const nextSourceRecordId = candidate
-        ? candidate.sourceRecordId
-        : sourceRecord?.id ?? fact.sourceRecordId;
+      const nextCandidateSourceRecordId = candidate?.sourceRecordId ?? null;
       const decisionStateChanged =
         fact.candidateValue !== nextCandidateValue ||
         fact.lifecycleStatus !== nextLifecycleStatus ||
-        (candidate !== undefined &&
-          fact.sourceRecordId !== nextSourceRecordId);
+        fact.candidateSourceRecordId !== nextCandidateSourceRecordId ||
+        (fact.candidateObservedAt?.getTime() ?? null) !==
+          (candidateObservedAt?.getTime() ?? null) ||
+        fact.candidateEvidence !== (candidate?.evidence ?? null);
 
       const updated = await transaction.clientFact.updateMany({
         where: {
@@ -464,11 +488,11 @@ export const createReviewService = (
         },
         data: {
           candidateValue: nextCandidateValue,
+          candidateSourceRecordId: nextCandidateSourceRecordId,
+          candidateObservedAt,
+          candidateEvidence: candidate?.evidence ?? null,
           lifecycleStatus: nextLifecycleStatus,
           confidence: candidate ? target.confidence : "Low",
-          sourceRecordId: nextSourceRecordId,
-          observedAt:
-            candidateObservedAt ?? sourceRecord?.observedAt ?? fact.observedAt,
           explanation: candidate
             ? target.explanation(candidate.proposedValue)
             : clearCandidateExplanation(fact.field),
@@ -599,6 +623,30 @@ export const createReviewService = (
         fact.candidateValue
       );
       const factUpdate = applyDecisionToFact(fact, payload.decision);
+      const promotesCandidate =
+        payload.decision === DecisionType.CONFIRM ||
+        payload.decision === DecisionType.APPROVE;
+      const provenanceUpdate = promotesCandidate
+        ? {
+            previousSourceRecordId: fact.officialSourceRecordId,
+            previousObservedAt: fact.officialObservedAt,
+            officialSourceRecordId:
+              fact.candidateSourceRecordId ?? fact.officialSourceRecordId,
+            officialObservedAt:
+              fact.candidateObservedAt ?? fact.officialObservedAt,
+            sourceRecordId:
+              fact.candidateSourceRecordId ?? fact.officialSourceRecordId,
+            observedAt:
+              fact.candidateObservedAt ?? fact.officialObservedAt,
+            candidateSourceRecordId: null,
+            candidateObservedAt: null,
+            candidateEvidence: null
+          }
+        : {
+            candidateSourceRecordId: null,
+            candidateObservedAt: null,
+            candidateEvidence: null
+          };
       const updated = await transaction.clientFact.updateMany({
         where: {
           id: factId,
@@ -610,6 +658,7 @@ export const createReviewService = (
         },
         data: {
           ...factUpdate,
+          ...provenanceUpdate,
           revision: { increment: 1 }
         }
       });

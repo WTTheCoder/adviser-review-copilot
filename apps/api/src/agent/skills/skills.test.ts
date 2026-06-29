@@ -42,8 +42,6 @@ const createCandidateFact = (
   proposedValue,
   confidence: "MEDIUM",
   evidence: `Evidence for ${proposedValue}`,
-  sourceRecordId: "source-meeting-note",
-  observedDate: "2026-06-04",
   requiresHumanReview: true
 });
 
@@ -104,10 +102,24 @@ const createReview = (): ReviewResponse => ({
       officialValue: "East Perth",
       candidateValue: "Subiaco",
       previousValue: null,
-      sourceRecordId: "source-meeting-note",
-      sourceDocument: "Adviser Meeting Note",
-      observedAt: "2026-06-04T00:00:00.000Z",
-      observedDate: "4 June 2026",
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex may have moved to Subiaco, but the address has not been confirmed.",
       confidence: "Medium",
       lifecycleStatus: "NEEDS_CONFIRMATION",
       status: "Needs confirmation",
@@ -121,10 +133,24 @@ const createReview = (): ReviewResponse => ({
       officialValue: "Balanced",
       candidateValue: "Growth-oriented",
       previousValue: null,
-      sourceRecordId: "source-meeting-note",
-      sourceDocument: "Adviser Meeting Note",
-      observedAt: "2026-06-04T00:00:00.000Z",
-      observedDate: "4 June 2026",
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex is considering a more growth-oriented investment approach.",
       confidence: "Medium",
       lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
       status: "Requires adviser approval",
@@ -234,6 +260,17 @@ const createHarness = (
 
       if (address) {
         address.candidateValue = extractedAddress?.proposedValue ?? null;
+        address.candidateSourceRecordId = extractedAddress?.sourceRecordId ?? null;
+        address.candidateSourceDocument = extractedAddress
+          ? "Adviser Meeting Note"
+          : null;
+        address.candidateObservedAt = extractedAddress
+          ? `${extractedAddress.observedDate}T00:00:00.000Z`
+          : null;
+        address.candidateObservedDate = extractedAddress
+          ? "4 June 2026"
+          : null;
+        address.candidateEvidence = extractedAddress?.evidence ?? null;
         address.lifecycleStatus = extractedAddress
           ? "NEEDS_CONFIRMATION"
           : "CURRENT";
@@ -242,6 +279,17 @@ const createHarness = (
 
       if (risk) {
         risk.candidateValue = extractedRisk?.proposedValue ?? null;
+        risk.candidateSourceRecordId = extractedRisk?.sourceRecordId ?? null;
+        risk.candidateSourceDocument = extractedRisk
+          ? "Adviser Meeting Note"
+          : null;
+        risk.candidateObservedAt = extractedRisk
+          ? `${extractedRisk.observedDate}T00:00:00.000Z`
+          : null;
+        risk.candidateObservedDate = extractedRisk
+          ? "4 June 2026"
+          : null;
+        risk.candidateEvidence = extractedRisk?.evidence ?? null;
         risk.lifecycleStatus = extractedRisk
           ? "REQUIRES_ADVISER_APPROVAL"
           : "CURRENT";
@@ -303,18 +351,60 @@ const createHarness = (
 
       if (fact && payload.decision === DecisionType.CONFIRM) {
         fact.previousValue = fact.officialValue;
+        fact.previousSourceRecordId = fact.officialSourceRecordId;
+        fact.previousSourceDocument = fact.officialSourceDocument;
+        fact.previousObservedAt = fact.officialObservedAt;
+        fact.previousObservedDate = fact.officialObservedDate;
         fact.officialValue = fact.candidateValue ?? fact.officialValue;
         fact.currentValue = fact.officialValue;
+        fact.officialSourceRecordId =
+          fact.candidateSourceRecordId ?? fact.officialSourceRecordId;
+        fact.officialSourceDocument =
+          fact.candidateSourceDocument ?? fact.officialSourceDocument;
+        fact.officialObservedAt =
+          fact.candidateObservedAt ?? fact.officialObservedAt;
+        fact.officialObservedDate =
+          fact.candidateObservedDate ?? fact.officialObservedDate;
+        fact.sourceRecordId = fact.officialSourceRecordId;
+        fact.sourceDocument = fact.officialSourceDocument;
+        fact.observedAt = fact.officialObservedAt;
+        fact.observedDate = fact.officialObservedDate;
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
 
       if (fact && payload.decision === DecisionType.APPROVE) {
         fact.previousValue = fact.officialValue;
+        fact.previousSourceRecordId = fact.officialSourceRecordId;
+        fact.previousSourceDocument = fact.officialSourceDocument;
+        fact.previousObservedAt = fact.officialObservedAt;
+        fact.previousObservedDate = fact.officialObservedDate;
         fact.officialValue = fact.candidateValue ?? fact.officialValue;
         fact.currentValue = fact.officialValue;
+        fact.officialSourceRecordId =
+          fact.candidateSourceRecordId ?? fact.officialSourceRecordId;
+        fact.officialSourceDocument =
+          fact.candidateSourceDocument ?? fact.officialSourceDocument;
+        fact.officialObservedAt =
+          fact.candidateObservedAt ?? fact.officialObservedAt;
+        fact.officialObservedDate =
+          fact.candidateObservedDate ?? fact.officialObservedDate;
+        fact.sourceRecordId = fact.officialSourceRecordId;
+        fact.sourceDocument = fact.officialSourceDocument;
+        fact.observedAt = fact.officialObservedAt;
+        fact.observedDate = fact.officialObservedDate;
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
@@ -325,6 +415,11 @@ const createHarness = (
           payload.decision === DecisionType.KEEP_CURRENT)
       ) {
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
@@ -769,7 +864,8 @@ describe("required skills", () => {
       candidateValue: "High Growth",
       previousValue: null,
       lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
-      sourceRecordId: "source-meeting-note"
+      sourceRecordId: "source-annual-review",
+      candidateSourceRecordId: "source-meeting-note"
     });
     expect(
       result.ok
@@ -907,7 +1003,9 @@ describe("required skills", () => {
     expect(risk?.lifecycleStatus).toBe("REQUIRES_ADVISER_APPROVAL");
     expect(
       result.ok
-        ? JSON.stringify(result.output.clientFacts).includes(freeFormPhrase)
+        ? result.output.clientFacts.some(
+            (fact) => fact.candidateValue === freeFormPhrase
+          )
         : true
     ).toBe(false);
   });

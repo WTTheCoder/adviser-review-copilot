@@ -55,6 +55,7 @@ const extractedCandidateProjectionSchema = z.object({
     "SUPERANNUATION"
   ]),
   proposedValue: z.string().min(1).max(160),
+  evidence: z.string().min(1).max(240),
   applicationStatus: z.enum([
     "NEEDS_CONFIRMATION",
     "REQUIRES_ADVISER_APPROVAL",

@@ -65,7 +65,10 @@ model SourceRecord {
   lifecycleStatus LifecycleStatus
   createdAt       DateTime         @default(now())
   client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  facts           ClientFact[]
+  facts           ClientFact[]     @relation("LegacyFactSource")
+  officialFacts   ClientFact[]     @relation("OfficialFactSource")
+  previousFacts   ClientFact[]     @relation("PreviousFactSource")
+  candidateFacts  ClientFact[]     @relation("CandidateFactSource")
 
   @@index([clientId])
 }
@@ -79,6 +82,13 @@ model ClientFact {
   previousValue    String?
   sourceRecordId   String
   observedAt       DateTime
+  officialSourceRecordId String
+  officialObservedAt     DateTime
+  previousSourceRecordId String?
+  previousObservedAt     DateTime?
+  candidateSourceRecordId String?
+  candidateObservedAt     DateTime?
+  candidateEvidence       String?
   confidence       String
   lifecycleStatus  LifecycleStatus
   explanation      String
@@ -86,11 +96,17 @@ model ClientFact {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   client           Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  sourceRecord     SourceRecord      @relation(fields: [sourceRecordId], references: [id])
+  sourceRecord     SourceRecord      @relation("LegacyFactSource", fields: [sourceRecordId], references: [id])
+  officialSourceRecord SourceRecord  @relation("OfficialFactSource", fields: [officialSourceRecordId], references: [id])
+  previousSourceRecord SourceRecord? @relation("PreviousFactSource", fields: [previousSourceRecordId], references: [id])
+  candidateSourceRecord SourceRecord? @relation("CandidateFactSource", fields: [candidateSourceRecordId], references: [id])
   adviserDecisions AdviserDecision[]
 
   @@index([clientId])
   @@index([sourceRecordId])
+  @@index([officialSourceRecordId])
+  @@index([previousSourceRecordId])
+  @@index([candidateSourceRecordId])
 }
 
 model AdviserDecision {

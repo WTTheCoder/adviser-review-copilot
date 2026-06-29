@@ -1,9 +1,13 @@
-import type { CandidateFact } from "./candidateFactSchemas.js";
+import type {
+  CandidateFact,
+  TrustedCandidateFact
+} from "./candidateFactSchemas.js";
 import { normalizeRiskProfileCandidate } from "../../domain/riskProfile.js";
 
 export type CandidateReviewClassification = {
   field: CandidateFact["field"];
   proposedValue: string;
+  evidence: string;
   sourceRecordId: string;
   observedDate: string;
   applicationStatus:
@@ -18,8 +22,18 @@ export type CandidateReviewClassificationResult = {
   warnings: string[];
 };
 
+export const attachTrustedCandidateProvenance = (
+  candidates: readonly CandidateFact[],
+  provenance: Pick<TrustedCandidateFact, "sourceRecordId" | "observedDate">
+): TrustedCandidateFact[] =>
+  candidates.map((candidate) => ({
+    ...candidate,
+    sourceRecordId: provenance.sourceRecordId,
+    observedDate: provenance.observedDate
+  }));
+
 export const classifyCandidateFactsWithDiagnostics = (
-  candidates: readonly CandidateFact[]
+  candidates: readonly TrustedCandidateFact[]
 ): CandidateReviewClassificationResult => {
   const warnings: string[] = [];
   const classifications = candidates.flatMap<CandidateReviewClassification>((candidate) => {
@@ -27,6 +41,7 @@ export const classifyCandidateFactsWithDiagnostics = (
       return {
         field: candidate.field,
         proposedValue: candidate.proposedValue,
+        evidence: candidate.evidence,
         sourceRecordId: candidate.sourceRecordId,
         observedDate: candidate.observedDate,
         applicationStatus: "NEEDS_CONFIRMATION",
@@ -50,6 +65,7 @@ export const classifyCandidateFactsWithDiagnostics = (
       return {
         field: candidate.field,
         proposedValue: normalizedRiskProfile,
+        evidence: candidate.evidence,
         sourceRecordId: candidate.sourceRecordId,
         observedDate: candidate.observedDate,
         applicationStatus: "REQUIRES_ADVISER_APPROVAL",
@@ -60,6 +76,7 @@ export const classifyCandidateFactsWithDiagnostics = (
     return {
       field: candidate.field,
       proposedValue: candidate.proposedValue,
+      evidence: candidate.evidence,
       sourceRecordId: candidate.sourceRecordId,
       observedDate: candidate.observedDate,
       applicationStatus: "CANDIDATE_REVIEW",
@@ -71,6 +88,6 @@ export const classifyCandidateFactsWithDiagnostics = (
 };
 
 export const classifyCandidateFacts = (
-  candidates: readonly CandidateFact[]
+  candidates: readonly TrustedCandidateFact[]
 ): CandidateReviewClassification[] =>
   classifyCandidateFactsWithDiagnostics(candidates).classifications;

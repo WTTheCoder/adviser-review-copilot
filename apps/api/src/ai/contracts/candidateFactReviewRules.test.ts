@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { classifyCandidateFacts } from "./candidateFactReviewRules.js";
-import type { CandidateFact } from "./candidateFactSchemas.js";
+import {
+  attachTrustedCandidateProvenance,
+  classifyCandidateFacts
+} from "./candidateFactReviewRules.js";
+import type {
+  CandidateFact,
+  TrustedCandidateFact
+} from "./candidateFactSchemas.js";
 
 const createCandidate = (
   field: CandidateFact["field"],
   proposedValue: string
-): CandidateFact => ({
+): TrustedCandidateFact => ({
   field,
   proposedValue,
   confidence: "HIGH",
@@ -79,5 +85,46 @@ describe("candidate fact review rules", () => {
         createCandidate("FINANCIAL_GOAL", "Near-term home purchase")
       ])[0]?.requiresHumanReview
     ).toBe(true);
+  });
+
+  it("attaches trusted provenance to extracted candidates", () => {
+    expect(
+      attachTrustedCandidateProvenance(
+        [createCandidate("ADDRESS", "Subiaco")],
+        {
+          sourceRecordId: "source-current-note",
+          observedDate: "2026-06-05"
+        }
+      )[0]
+    ).toMatchObject({
+      sourceRecordId: "source-current-note",
+      observedDate: "2026-06-05"
+    });
+  });
+
+  it("overwrites forged source IDs and future dates before classification", () => {
+    const forgedCandidate = {
+      field: "ADDRESS",
+      proposedValue: "Subiaco",
+      confidence: "HIGH",
+      evidence: "Supported by note",
+      requiresHumanReview: false,
+      sourceRecordId: "source-annual-review",
+      observedDate: "2099-01-01"
+    } as CandidateFact;
+
+    const enriched = attachTrustedCandidateProvenance([forgedCandidate], {
+      sourceRecordId: "source-current-upload",
+      observedDate: "2026-06-04"
+    });
+
+    expect(enriched[0]).toMatchObject({
+      sourceRecordId: "source-current-upload",
+      observedDate: "2026-06-04"
+    });
+    expect(classifyCandidateFacts(enriched)[0]).toMatchObject({
+      sourceRecordId: "source-current-upload",
+      observedDate: "2026-06-04"
+    });
   });
 });

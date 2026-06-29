@@ -144,8 +144,6 @@ export class MockCandidateFactExtractor implements CandidateFactExtractor {
         proposedValue: address,
         confidence: "MEDIUM",
         evidence: `may have moved to ${address}`,
-        sourceRecordId: input.sourceRecordId,
-        observedDate: input.observedDate,
         requiresHumanReview: true,
         reason: "The note describes the address as unconfirmed."
       });
@@ -171,8 +169,6 @@ export class MockCandidateFactExtractor implements CandidateFactExtractor {
         proposedValue: riskProfile.candidate,
         confidence: "MEDIUM",
         evidence: riskProfile.evidence,
-        sourceRecordId: input.sourceRecordId,
-        observedDate: input.observedDate,
         requiresHumanReview: true,
         reason: "Risk-profile changes are high impact."
       });
@@ -187,8 +183,6 @@ export class MockCandidateFactExtractor implements CandidateFactExtractor {
         proposedValue: "Home purchase remains a near-term priority",
         confidence: "MEDIUM",
         evidence: "home purchase remains a near-term priority",
-        sourceRecordId: input.sourceRecordId,
-        observedDate: input.observedDate,
         requiresHumanReview: true,
         reason:
           "The note supports a candidate goal update, but the verified annual review remains authoritative."

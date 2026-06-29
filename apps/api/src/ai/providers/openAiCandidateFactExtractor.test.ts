@@ -80,8 +80,6 @@ describe("OpenAiCandidateFactExtractor", () => {
               proposedValue: "Subiaco",
               confidence: "MEDIUM",
               evidence: "may have moved to Subiaco",
-              sourceRecordId: "source-meeting-note",
-              observedDate: "2026-06-04",
               requiresHumanReview: false
             }
           ],

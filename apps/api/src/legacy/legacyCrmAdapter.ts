@@ -33,7 +33,9 @@ export const createLegacyCrmAdapter = (client: PrismaClient) => ({
     client.clientFact.findMany({
       where: { clientId },
       include: {
-        sourceRecord: true,
+        officialSourceRecord: true,
+        previousSourceRecord: true,
+        candidateSourceRecord: true,
         adviserDecisions: {
           orderBy: { createdAt: "desc" },
           take: 1

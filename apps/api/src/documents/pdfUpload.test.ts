@@ -14,7 +14,10 @@ import {
   type PdfDocumentPort
 } from "./pdfUpload.js";
 import { MockCandidateFactExtractor } from "../ai/providers/mockCandidateFactExtractor.js";
-import { classifyCandidateFacts } from "../ai/contracts/candidateFactReviewRules.js";
+import {
+  attachTrustedCandidateProvenance,
+  classifyCandidateFacts
+} from "../ai/contracts/candidateFactReviewRules.js";
 
 const escapePdfText = (value: string) =>
   value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
@@ -203,7 +206,12 @@ describe("PDF extraction wrapper", () => {
       meetingNoteText: extracted.text,
       supportedFields: ["ADDRESS", "RISK_PROFILE"]
     });
-    const classifications = classifyCandidateFacts(extraction.candidateFacts);
+    const classifications = classifyCandidateFacts(
+      attachTrustedCandidateProvenance(extraction.candidateFacts, {
+        sourceRecordId: "source-upload-pdf",
+        observedDate: "2026-06-24"
+      })
+    );
 
     expect(extracted.text).toContain(
       "considering changing to a High Growth risk profile"
@@ -212,9 +220,7 @@ describe("PDF extraction wrapper", () => {
       expect.arrayContaining([
         expect.objectContaining({
           field: "RISK_PROFILE",
-          proposedValue: "High Growth",
-          sourceRecordId: "source-upload-pdf",
-          observedDate: "2026-06-24"
+          proposedValue: "High Growth"
         })
       ])
     );
@@ -254,7 +260,14 @@ describe("PDF extraction wrapper", () => {
         (candidate) => candidate.field === "RISK_PROFILE"
       )
     ).toEqual([]);
-    expect(classifyCandidateFacts(extraction.candidateFacts)).toEqual([]);
+    expect(
+      classifyCandidateFacts(
+        attachTrustedCandidateProvenance(extraction.candidateFacts, {
+          sourceRecordId: "source-upload-negated-pdf",
+          observedDate: "2026-06-24"
+        })
+      )
+    ).toEqual([]);
   });
 
   it("does not project cross-sentence contradictory risk evidence from a real PDF", async () => {
@@ -282,7 +295,14 @@ describe("PDF extraction wrapper", () => {
         (candidate) => candidate.field === "RISK_PROFILE"
       )
     ).toEqual([]);
-    expect(classifyCandidateFacts(extraction.candidateFacts)).toEqual([]);
+    expect(
+      classifyCandidateFacts(
+        attachTrustedCandidateProvenance(extraction.candidateFacts, {
+          sourceRecordId: "source-upload-contradictory-pdf",
+          observedDate: "2026-06-24"
+        })
+      )
+    ).toEqual([]);
   });
 
   it("extracts known text in stable page order and reports page count", async () => {

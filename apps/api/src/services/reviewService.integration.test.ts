@@ -49,7 +49,19 @@ const riskCandidate = (
 ): ExtractedCandidateProjection => ({
   field: "RISK_PROFILE",
   proposedValue,
+  evidence: `Evidence for ${proposedValue}`,
   applicationStatus: "REQUIRES_ADVISER_APPROVAL",
+  sourceRecordId: "source-meeting-note",
+  observedDate: "2026-06-04"
+});
+
+const addressCandidate = (
+  proposedValue = "Joondalup"
+): ExtractedCandidateProjection => ({
+  field: "ADDRESS",
+  proposedValue,
+  evidence: `Evidence for ${proposedValue}`,
+  applicationStatus: "NEEDS_CONFIRMATION",
   sourceRecordId: "source-meeting-note",
   observedDate: "2026-06-04"
 });
@@ -393,6 +405,119 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     await expect(
       commitPreparation(staleService, staleEpoch, [riskCandidate()])
     ).rejects.toBeInstanceOf(ClientMutationConflictError);
+  });
+
+  it("keeps official provenance stable when preparation extracts no candidates", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, expectedMutationEpoch, []);
+
+    expect(await factState("fact-address")).toMatchObject({
+      officialValue: "East Perth",
+      officialSourceRecordId: "source-annual-review",
+      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null
+    });
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "Balanced",
+      officialSourceRecordId: "source-annual-review",
+      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null
+    });
+  });
+
+  it("stores candidate provenance separately while official provenance remains stable", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, expectedMutationEpoch, [
+      addressCandidate("Fremantle"),
+      riskCandidate("High Growth")
+    ]);
+
+    expect(await factState("fact-address")).toMatchObject({
+      officialValue: "East Perth",
+      officialSourceRecordId: "source-annual-review",
+      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: "Fremantle",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateEvidence: "Evidence for Fremantle"
+    });
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "Balanced",
+      officialSourceRecordId: "source-annual-review",
+      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: "High Growth",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      candidateEvidence: "Evidence for High Growth"
+    });
+  });
+
+  it("moves candidate provenance to official provenance on approval", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, expectedMutationEpoch, [
+      riskCandidate("High Growth")
+    ]);
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.APPROVE
+    });
+
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "High Growth",
+      officialSourceRecordId: "source-meeting-note",
+      officialObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+      previousValue: "Balanced",
+      previousSourceRecordId: "source-annual-review",
+      previousObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: null,
+      candidateSourceRecordId: null,
+      candidateObservedAt: null,
+      candidateEvidence: null
+    });
+  });
+
+  it("restores deterministic seeded provenance on reset", async () => {
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await commitPreparation(service, expectedMutationEpoch, [
+      addressCandidate("Fremantle")
+    ]);
+    await service.resetDemo();
+
+    expect(await factState("fact-address")).toMatchObject({
+      officialValue: "East Perth",
+      officialSourceRecordId: "source-annual-review",
+      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+      candidateValue: "Subiaco",
+      candidateSourceRecordId: "source-meeting-note",
+      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z")
+    });
   });
 
   it("rolls back the complete reset when the seed transaction fails", async () => {

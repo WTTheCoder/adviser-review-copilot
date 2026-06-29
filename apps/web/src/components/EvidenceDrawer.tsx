@@ -90,7 +90,7 @@ export const EvidenceDrawer = ({
                 Source document
               </dt>
               <dd className="mt-1 text-base font-semibold text-slate-950">
-                {fact.sourceDocument}
+                {fact.officialSourceDocument}
               </dd>
             </div>
             <div>
@@ -98,9 +98,29 @@ export const EvidenceDrawer = ({
                 Observed date
               </dt>
               <dd className="mt-1 text-base font-semibold text-slate-950">
-                {fact.observedDate}
+                {fact.officialObservedDate}
               </dd>
             </div>
+            {fact.candidateValue && fact.candidateSourceDocument ? (
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Candidate source
+                </dt>
+                <dd className="mt-1 text-base font-semibold text-slate-950">
+                  {fact.candidateSourceDocument}
+                </dd>
+              </div>
+            ) : null}
+            {fact.candidateValue && fact.candidateObservedDate ? (
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Candidate observed date
+                </dt>
+                <dd className="mt-1 text-base font-semibold text-slate-950">
+                  {fact.candidateObservedDate}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Confidence
@@ -127,6 +147,16 @@ export const EvidenceDrawer = ({
               {explanation}
             </p>
           </section>
+          {fact.candidateEvidence ? (
+            <section className="rounded border border-slate-200 bg-white p-4">
+              <h3 className="text-base font-semibold text-slate-950">
+                Candidate evidence
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                {fact.candidateEvidence}
+              </p>
+            </section>
+          ) : null}
         </div>
       </aside>
     </div>

@@ -10,8 +10,6 @@ const validResult = {
       proposedValue: "Subiaco",
       confidence: "MEDIUM",
       evidence: "may have moved to Subiaco",
-      sourceRecordId: "source-meeting-note",
-      observedDate: "2026-06-04",
       requiresHumanReview: true
     }
   ],
@@ -63,27 +61,31 @@ describe("candidate fact extraction schemas", () => {
     ).toThrow();
   });
 
-  it.each(["2026-06-04", "2024-02-29"])(
-    "accepts valid calendar date %s",
-    (observedDate) => {
-      expect(
-        candidateFactExtractionResultSchema.parse({
-          ...validResult,
-          candidateFacts: [{ ...validResult.candidateFacts[0], observedDate }]
-        }).candidateFacts[0]?.observedDate
-      ).toBe(observedDate);
-    }
-  );
+  it("rejects model-controlled source record IDs", () => {
+    expect(() =>
+      candidateFactExtractionResultSchema.parse({
+        ...validResult,
+        candidateFacts: [
+          {
+            ...validResult.candidateFacts[0],
+            sourceRecordId: "source-annual-review"
+          }
+        ]
+      })
+    ).toThrow();
+  });
 
-  it.each(["2026-99-99", "2026-02-31", "2025-02-29"])(
-    "rejects impossible calendar date %s",
-    (observedDate) => {
-      expect(() =>
-        candidateFactExtractionResultSchema.parse({
-          ...validResult,
-          candidateFacts: [{ ...validResult.candidateFacts[0], observedDate }]
-        })
-      ).toThrow();
-    }
-  );
+  it("rejects model-controlled observed dates", () => {
+    expect(() =>
+      candidateFactExtractionResultSchema.parse({
+        ...validResult,
+        candidateFacts: [
+          {
+            ...validResult.candidateFacts[0],
+            observedDate: "2099-01-01"
+          }
+        ]
+      })
+    ).toThrow();
+  });
 });

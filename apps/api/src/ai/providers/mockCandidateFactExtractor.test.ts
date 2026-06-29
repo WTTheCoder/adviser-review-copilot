@@ -59,8 +59,6 @@ describe("MockCandidateFactExtractor", () => {
         expect.objectContaining({
           field: "RISK_PROFILE",
           proposedValue: "High Growth",
-          sourceRecordId: "source-meeting-note",
-          observedDate: "2026-06-04",
           requiresHumanReview: true,
           evidence:
             "Alex is considering changing to a High Growth risk profile for the next review period."

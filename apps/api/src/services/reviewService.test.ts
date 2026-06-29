@@ -17,12 +17,24 @@ const createFact = (
   officialValue: "East Perth",
   candidateValue: "Subiaco",
   previousValue: null,
-  sourceRecordId: "source-meeting-note",
-  observedAt: new Date("2026-06-04T00:00:00.000Z"),
+  sourceRecordId: "source-annual-review",
+  observedAt: new Date("2025-11-16T00:00:00.000Z"),
+  officialSourceRecordId: "source-annual-review",
+  officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+  previousSourceRecordId: null,
+  previousObservedAt: null,
+  candidateSourceRecordId: "source-meeting-note",
+  candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+  candidateEvidence:
+    "Alex may have moved to Subiaco, but the address has not been confirmed.",
   confidence: "Medium",
   lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION,
   explanation: "Demo explanation",
-  sourceRecord: {
+  officialSourceRecord: {
+    title: "Annual Review"
+  },
+  previousSourceRecord: null,
+  candidateSourceRecord: {
     title: "Adviser Meeting Note"
   },
   adviserDecisions: [],
