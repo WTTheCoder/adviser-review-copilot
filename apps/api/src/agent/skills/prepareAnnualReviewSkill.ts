@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { reviewResponseSchema } from "@client-review-prep/shared";
-import { candidateFactExtractionResultSchema } from "../../ai/contracts/candidateFactSchemas.js";
+import {
+  candidateFactExtractionResultSchema,
+  MAX_MEETING_NOTE_CHARS
+} from "../../ai/contracts/candidateFactSchemas.js";
 import {
   attachTrustedCandidateProvenance,
   reconcileCandidateFactsWithDiagnostics
@@ -8,6 +11,7 @@ import {
 import type { SkillDefinition } from "./skillTypes.js";
 import { loadClientContextSkill } from "./loadClientContextSkill.js";
 import { reconcileClientFacts } from "./reconcileClientFactsSkill.js";
+import { selectRelevantSources } from "../../services/sourceRetrievalPolicy.js";
 
 export const prepareAnnualReviewInputSchema = z.object({
   clientId: z.string().min(1)
@@ -73,6 +77,32 @@ const extractionTraceLabel = (extraction: {
   return extraction.providerMode === "openai"
     ? `Extraction: OpenAI - ${extraction.model ?? "configured model"}`
     : "Extraction: Mock";
+};
+
+const sourceTypeFor = (source: {
+  upload?: { mediaType: string } | null | undefined;
+}) =>
+  source.upload?.mediaType === "application/pdf"
+    ? "UPLOADED_PDF"
+    : "ADVISER_MEETING_NOTE";
+
+const retrievalTraceDetail = (
+  consideredCount: number,
+  selectedSources: ReturnType<typeof selectRelevantSources>
+) => {
+  const selected = selectedSources
+    .map(
+      (item) =>
+        `${item.source.id} (${item.relevantFields.join(", ")}; ${item.reasons.join("; ")})`
+    )
+    .join(" | ");
+  const fallbackUsed = selectedSources.some((source) => source.fallback);
+
+  return [
+    `Considered ${consideredCount} source records.`,
+    `Selected ${selectedSources.length}${selected ? `: ${selected}` : "."}`,
+    fallbackUsed ? "Fallback source selection used." : "Deterministic field hints matched."
+  ].join(" ");
 };
 
 export const prepareAnnualReviewSkill: SkillDefinition<
@@ -172,45 +202,99 @@ export const prepareAnnualReviewSkill: SkillDefinition<
       }
     );
 
-    const meetingNote = loadedContext.sourceRecords.find(
-      (record) => record.type === "ADVISER_MEETING_NOTE"
+    const selectedSources = selectRelevantSources(
+      loadedContext.sourceRecords,
+      supportedFields
     );
-    const extraction = meetingNote
-      ? await context.toolRegistry.execute(
-          "ai.extractCandidateFacts",
-          {
-            clientId,
-            clientDisplayName: loadedContext.client.name,
-            sourceRecordId: meetingNote.id,
-            sourceType:
-              meetingNote.upload?.mediaType === "application/pdf"
-                ? "UPLOADED_PDF"
-                : "ADVISER_MEETING_NOTE",
-            observedDate: meetingNote.observedAt.slice(0, 10),
-            meetingNoteText: meetingNote.content.join("\n").slice(0, 4000),
-            supportedFields
-          },
-          prepareAnnualReviewSkill.allowedTools,
-          context,
-          candidateFactExtractionResultSchema
-        )
-      : candidateFactExtractionResultSchema.parse({
-          providerMode: "mock",
-          model: null,
-          candidateFacts: [],
-          warnings: ["No adviser meeting note was available for extraction."],
-          metadata: {
-            durationMs: 0,
-            sourceTextLength: 0,
-            candidateCount: 0
-          }
-        });
+    const retrievalDetail = retrievalTraceDetail(
+      loadedContext.sourceRecords.length,
+      selectedSources
+    );
+    context.recordEvent({
+      label: "Bounded source context retrieved",
+      detail: retrievalDetail
+    });
+    await recordStep(
+      {
+        workflowRunId: run.workflowRunId,
+        sequence: sequence++,
+        label: "Bounded source context retrieved",
+        detail: retrievalDetail
+      }
+    );
+
+    const extractionResults = await Promise.all(
+      selectedSources.map(async (selected) => {
+        const sourceText = selected.source.content
+          .join("\n")
+          .slice(0, MAX_MEETING_NOTE_CHARS);
+
+        if (sourceText.length === 0) {
+          return {
+            selected,
+            extraction: candidateFactExtractionResultSchema.parse({
+              providerMode: "mock",
+              model: null,
+              candidateFacts: [],
+              warnings: [`Selected source ${selected.source.id} had no extractable text.`],
+              metadata: {
+                durationMs: 0,
+                sourceTextLength: 0,
+                candidateCount: 0
+              }
+            })
+          };
+        }
+
+        return {
+          selected,
+          extraction: await context.toolRegistry.execute(
+            "ai.extractCandidateFacts",
+            {
+              clientId,
+              clientDisplayName: loadedContext.client.name,
+              sourceRecordId: selected.source.id,
+              sourceType: sourceTypeFor(selected.source),
+              observedDate: selected.source.observedAt.slice(0, 10),
+              meetingNoteText: sourceText,
+              supportedFields: selected.relevantFields
+            },
+            prepareAnnualReviewSkill.allowedTools,
+            context,
+            candidateFactExtractionResultSchema
+          )
+        };
+      })
+    );
+    const extractionWarnings =
+      extractionResults.length > 0
+        ? extractionResults.flatMap((result) => result.extraction.warnings)
+        : ["No relevant source was available for extraction."];
+    const extractedCandidateCount = extractionResults.reduce(
+      (total, result) => total + result.extraction.candidateFacts.length,
+      0
+    );
+    const providerMode: "mock" | "openai" = extractionResults.some(
+      (result) => result.extraction.providerMode === "openai"
+    )
+      ? "openai"
+      : "mock";
+    const extraction = {
+      providerMode,
+      model:
+        extractionResults.find((result) => result.extraction.model !== null)
+          ?.extraction.model ?? null,
+      warnings: extractionWarnings,
+      candidateFacts: extractionResults.flatMap(
+        (result) => result.extraction.candidateFacts
+      )
+    };
     await recordStep(
       {
         workflowRunId: run.workflowRunId,
         sequence: sequence++,
         label: "Candidate facts extracted through controlled model boundary",
-        detail: `${extractionTraceLabel(extraction)}. ${extraction.candidateFacts.length} candidate facts.`
+        detail: `${extractionTraceLabel(extraction)}. ${selectedSources.length} source(s), ${extractedCandidateCount} candidate facts.`
       }
     );
     await recordStep(
@@ -220,12 +304,12 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         label: "Validated structured extraction output"
       }
     );
-    const trustedCandidates = meetingNote
-      ? attachTrustedCandidateProvenance(extraction.candidateFacts, {
-          sourceRecordId: meetingNote.id,
-          observedDate: meetingNote.observedAt.slice(0, 10)
-        })
-      : [];
+    const trustedCandidates = extractionResults.flatMap((result) =>
+      attachTrustedCandidateProvenance(result.extraction.candidateFacts, {
+        sourceRecordId: result.selected.source.id,
+        observedDate: result.selected.source.observedAt.slice(0, 10)
+      })
+    );
     const classification = reconcileCandidateFactsWithDiagnostics(
       trustedCandidates,
       loadedContext.existingFacts.flatMap((fact) => {
@@ -327,7 +411,7 @@ export const prepareAnnualReviewSkill: SkillDefinition<
       extractionMetadata: {
         providerMode: extraction.providerMode,
         model: extraction.model,
-        candidateCount: extraction.candidateFacts.length,
+        candidateCount: extractedCandidateCount,
         warnings: [...extraction.warnings, ...classification.warnings]
       }
     };
