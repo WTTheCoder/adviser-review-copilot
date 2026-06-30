@@ -6,6 +6,7 @@ Adviser Review Copilot treats model output as untrusted proposal data. The model
 
 ```text
 prepare-annual-review skill
+-> deterministic bounded source retrieval
 -> ai.extractCandidateFacts tool
 -> CandidateFactExtractor
 -> mock provider or OpenAI provider
@@ -18,7 +19,7 @@ The provider receives no Prisma client, Fastify server, React state, tool regist
 
 ## Data Sent To Live Extraction
 
-Only bounded source context crosses the model boundary:
+Only bounded source context from selected sources crosses the model boundary:
 
 - safe client display name;
 - source record ID and type as context only;
@@ -27,6 +28,23 @@ Only bounded source context crosses the model boundary:
 - supported candidate fields.
 
 Uploaded PDFs are identified as `UPLOADED_PDF`; only extracted plain text is sent. Raw PDF bytes are never sent to the model.
+
+## Deterministic Source Retrieval
+
+Preparation does not send all source records blindly to the extractor. It first applies application-owned retrieval policy to the trusted source records already loaded for the client:
+
+```text
+supported fact fields
++ source record type and upload metadata
++ conservative text hints
+-> relevance score
+-> deterministic bounded selected sources
+-> one extraction call per selected source
+```
+
+The policy sorts selected sources by relevance score, trusted observation date, and source ID. If no field hints match, it uses a conservative fallback to the latest eligible adviser note or uploaded source rather than loading every record. This is deterministic retrieval, not vector search or semantic memory.
+
+Each selected source is extracted separately so provenance is not mixed. The model can see the selected source ID and observed date as context, but trusted application code still attaches those values after extraction. Candidate assertions from all selected sources are then reconciled together, preserving cross-source contradiction handling.
 
 ## Structured Output Validation
 
@@ -85,6 +103,8 @@ The adviser-facing summary metrics are derived from the final review projection.
 
 The application does not persist API keys, chain of thought, raw provider payloads, raw prompts, raw PDF bytes, or duplicate meeting-note text in workflow traces. Uploaded normalized text is stored only after validation succeeds.
 
+Working context such as selected sources, extraction results, reconciliation intermediates, parser bytes, and in-memory execution events is temporary unless it is deliberately transformed into durable source records, workflow rows, candidate fact state, or adviser decision snapshots.
+
 ## Known Limitations
 
-This boundary is designed for a fictional portfolio demo, not regulatory compliance. Future production work would need authentication, tenant isolation, live-model evaluation, richer diagnostics, production observability, parser isolation, malware scanning, retention controls, OCR if required, and broader deterministic normalization.
+This boundary is designed for a fictional portfolio demo, not regulatory compliance. Future production work would need authentication, tenant isolation, live-model evaluation, richer diagnostics, production observability, parser isolation, malware scanning, database-backed retention controls if required, OCR if required, and broader deterministic normalization. It does not implement conversational memory, embeddings, a vector database, automatic deletion, or memory decay.

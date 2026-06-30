@@ -38,13 +38,36 @@ Public callers cannot submit arbitrary skill names, tool names, SQL, provider pr
 1. Validate skill input.
 2. Capture the durable `Client.mutationEpoch`.
 3. Load client, source records, and facts through legacy CRM tools.
-4. Extract candidate facts through the controlled model boundary.
-5. Attach trusted source provenance in application code.
-6. Reconcile duplicate, contradictory, stale, unsupported, and official-supporting assertions.
-7. Commit the candidate projection, review status, workflow run, and workflow steps in one transaction.
-8. Return the prepared review response with execution and extraction metadata.
+4. Select bounded relevant source records using deterministic retrieval policy.
+5. Extract candidate facts from each selected source through the controlled model boundary.
+6. Attach trusted source provenance in application code.
+7. Reconcile duplicate, contradictory, stale, unsupported, and official-supporting assertions across all selected sources.
+8. Commit the candidate projection, review status, workflow run, and workflow steps in one transaction.
+9. Return the prepared review response with execution and extraction metadata.
 
 Candidate projection uses explicit official/candidate provenance and `ClientFact.revision` compare-and-swap. Reprocessing identical evidence is idempotent.
+
+## Context And History Classification
+
+The harness and skills separate temporary working context from durable history and state:
+
+| Category | Scope |
+| --- | --- |
+| Working context | loaded client context, selected sources, extraction results, trusted candidate assertions, reconciliation intermediates, temporary document parsing data, and in-memory execution events |
+| Episodic history | `WorkflowRun`, `WorkflowStep`, upload/preparation events, `AdviserDecision`, and durable decision snapshots |
+| Retrievable knowledge | legacy CRM source records, annual review records, adviser meeting notes, and uploaded normalized documents |
+| Persistent client state | official, previous, and candidate fact values with explicit provenance |
+| Workflow state | preparation status, ready-for-review state, lifecycle status, refresh-required state, and mutation guards; this is operational state, not memory |
+
+This classification is architectural documentation and narrow runtime policy. It does not add database columns, retention jobs, automatic archiving, conversational memory, or a summarisation pipeline.
+
+## Just-In-Time Source Retrieval
+
+Source retrieval happens after source records are loaded through allowlisted tools and before extraction. The policy uses only trusted application data: supported fact fields, source type, safe upload metadata, source title/summary, bounded normalized source lines, and conservative keyword hints. Source type alone does not make a record relevant.
+
+The retrieval step selects a small bounded set of sources, preserving source ID and observed date. The preparation skill calls the existing extractor once per selected source, then attaches each source's trusted provenance separately. The existing deterministic reconciliation receives all trusted assertions together, so cross-source contradictions remain visible.
+
+Execution traces include the number of source records considered, the selected source IDs, relevant fields/reasons, and whether fallback was used. They do not include raw source text.
 
 ## Adviser Decisions
 

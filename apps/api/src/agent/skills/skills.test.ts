@@ -25,11 +25,15 @@ import {
 import type { FactForReview } from "../../services/reviewService.js";
 import { createDocumentTools } from "../tools/documentTools.js";
 import { MockCandidateFactExtractor } from "../../ai/providers/mockCandidateFactExtractor.js";
+import { AiError } from "../../ai/errors/aiErrors.js";
 import type {
   CandidateFact,
   CandidateFactExtractionResult
 } from "../../ai/contracts/candidateFactSchemas.js";
-import type { CandidateFactExtractor } from "../../ai/contracts/candidateFactExtractor.js";
+import type {
+  CandidateFactExtractionInput,
+  CandidateFactExtractor
+} from "../../ai/contracts/candidateFactExtractor.js";
 import {
   createPdfTextExtractor,
   type PdfParserAdapter
@@ -83,6 +87,33 @@ const buildSummaryMetrics = (review: ReviewResponse) => {
 
 const metricValue = (review: ReviewResponse, label: string) =>
   review.summaryMetrics.find((metric) => metric.label === label)?.value;
+
+type LegacySourceRecord = Awaited<
+  ReturnType<LegacyCrmToolAdapter["getLegacySourceRecords"]>
+>[number];
+
+const defaultLegacySourceRecords = (): LegacySourceRecord[] => [
+  {
+    id: "source-meeting-note",
+    type: "ADVISER_MEETING_NOTE",
+    title: "Adviser Meeting Note",
+    observedAt: new Date("2026-06-04T00:00:00.000Z"),
+    summary: "Recent adviser note containing candidate changes for review.",
+    content: [
+      "Alex is considering a more growth-oriented investment approach.",
+      "Alex may have moved to Subiaco, but the address has not been confirmed.",
+      "The home purchase remains a near-term priority."
+    ],
+    lifecycleStatus: "CURRENT"
+  }
+];
+
+const createLegacySourceRecord = (
+  overrides: Partial<LegacySourceRecord>
+): LegacySourceRecord => ({
+  ...defaultLegacySourceRecords()[0],
+  ...overrides
+}) as LegacySourceRecord;
 
 const legacyFactsForReview = (review: ReviewResponse): FactForReview[] =>
   review.clientFacts.map((fact) => ({
@@ -231,7 +262,8 @@ const createReview = (): ReviewResponse => ({
 
 const createHarness = (
   extractor: CandidateFactExtractor = new MockCandidateFactExtractor(),
-  pdfParserAdapter?: PdfParserAdapter
+  pdfParserAdapter?: PdfParserAdapter,
+  sourceRecords: LegacySourceRecord[] = defaultLegacySourceRecords()
 ) => {
   const skillRegistry = new SkillRegistry();
   const toolRegistry = new ToolRegistry();
@@ -240,6 +272,14 @@ const createHarness = (
     label: string;
     status: "COMPLETE" | "ESCALATED" | "FAILED";
     detail: string | null;
+  }> = [];
+  const committedCandidates: Array<{
+    field: string;
+    proposedValue: string;
+    evidence: string;
+    applicationStatus: string;
+    sourceRecordId: string;
+    observedDate: string;
   }> = [];
 
   skillRegistry.register(loadClientContextSkill);
@@ -257,27 +297,18 @@ const createHarness = (
       createdAt: new Date(),
       updatedAt: new Date()
     }),
-    getLegacySourceRecords: async () => [
-      {
-        id: "source-meeting-note",
-        type: "ADVISER_MEETING_NOTE",
-        title: "Adviser Meeting Note",
-        observedAt: new Date("2026-06-04T00:00:00.000Z"),
-        summary: "Recent adviser note containing candidate changes for review.",
-        content: [
-          "Alex is considering a more growth-oriented investment approach.",
-          "Alex may have moved to Subiaco, but the address has not been confirmed.",
-          "The home purchase remains a near-term priority."
-        ],
-        lifecycleStatus: "CURRENT"
-      }
-    ],
+    getLegacySourceRecords: async () => sourceRecords,
     getLegacyFacts: async () => legacyFactsForReview(review)
   } satisfies LegacyCrmToolAdapter;
 
   const reviewService = {
     captureClientMutationEpoch: async () => 0,
     commitPreparedReview: async (input) => {
+      committedCandidates.splice(
+        0,
+        committedCandidates.length,
+        ...input.candidates
+      );
       workflowSteps.splice(
         0,
         workflowSteps.length,
@@ -515,7 +546,8 @@ const createHarness = (
   return {
     harness: new ExecutionHarness(skillRegistry, toolRegistry),
     review,
-    workflowSteps
+    workflowSteps,
+    committedCandidates
   };
 };
 
@@ -567,6 +599,376 @@ describe("required skills", () => {
         })
       ])
     );
+    expect(result.ok ? result.output.adviserActions.map((action) => action.id) : []).toEqual([
+      "confirm-address",
+      "review-risk-profile"
+    ]);
+    expect(
+      workflowSteps.find((step) => step.label === "Bounded source context retrieved")
+        ?.detail
+    ).toContain("source-meeting-note");
+    expect(
+      workflowSteps.find((step) => step.label === "Bounded source context retrieved")
+        ?.detail
+    ).not.toContain("Subiaco");
+    expect(result.ok ? result.output : {}).not.toHaveProperty("retrievalMetadata");
+  });
+
+  it("preparation does not blindly extract from the first meeting note", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const { harness } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+          return createExtractionResult([]);
+        }
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-first-general-note",
+          observedAt: new Date("2026-06-05T00:00:00.000Z"),
+          content: ["Alex discussed general administration."]
+        }),
+        createLegacySourceRecord({
+          id: "source-relevant-address-note",
+          observedAt: new Date("2026-06-04T00:00:00.000Z"),
+          content: ["Alex may have moved to Fremantle."]
+        })
+      ]
+    );
+
+    await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(calls.map((call) => call.sourceRecordId)).toEqual([
+      "source-relevant-address-note"
+    ]);
+  });
+
+  it("extracts each selected source with bounded source text", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const longAddressText = `Alex may have moved to Joondalup. ${"x".repeat(5000)}`;
+    const { harness } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+          return createExtractionResult([]);
+        }
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-long-address",
+          content: [longAddressText]
+        }),
+        createLegacySourceRecord({
+          id: "source-risk",
+          content: ["Alex is considering High Growth."]
+        })
+      ]
+    );
+
+    await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(calls.map((call) => call.sourceRecordId).sort()).toEqual([
+      "source-long-address",
+      "source-risk"
+    ]);
+    expect(calls.every((call) => call.meetingNoteText.length <= 4000)).toBe(true);
+  });
+
+  it("keeps trusted provenance source-specific across selected sources", async () => {
+    const { harness, committedCandidates } = createHarness(
+      {
+        extract: async (input) =>
+          createExtractionResult(
+            input.sourceRecordId === "source-address"
+              ? [createCandidateFact("ADDRESS", "Fremantle")]
+              : [createCandidateFact("RISK_PROFILE", "High Growth")]
+          )
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-address",
+          observedAt: new Date("2026-06-05T00:00:00.000Z"),
+          content: ["Alex may have moved to Fremantle."]
+        }),
+        createLegacySourceRecord({
+          id: "source-risk",
+          observedAt: new Date("2026-06-06T00:00:00.000Z"),
+          content: ["Alex is considering High Growth."]
+        })
+      ]
+    );
+
+    await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(committedCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: "ADDRESS",
+          sourceRecordId: "source-address",
+          observedDate: "2026-06-05"
+        }),
+        expect.objectContaining({
+          field: "RISK_PROFILE",
+          sourceRecordId: "source-risk",
+          observedDate: "2026-06-06"
+        })
+      ])
+    );
+  });
+
+  it("reconciles selected source assertions together and withholds contradictions", async () => {
+    const { harness, committedCandidates } = createHarness(
+      {
+        extract: async (input) =>
+          createExtractionResult([
+            input.sourceRecordId === "source-risk-change"
+              ? {
+                  ...createCandidateFact("RISK_PROFILE", "High Growth"),
+                  evidence: "Alex is considering High Growth."
+                }
+              : {
+                  ...createCandidateFact("RISK_PROFILE", "Balanced"),
+                  evidence: "Alex decided to remain Balanced."
+                }
+          ])
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-risk-change",
+          observedAt: new Date("2026-06-06T00:00:00.000Z"),
+          content: ["Alex is considering High Growth."]
+        }),
+        createLegacySourceRecord({
+          id: "source-risk-current",
+          observedAt: new Date("2026-06-06T00:00:00.000Z"),
+          content: ["Alex decided to remain Balanced."]
+        })
+      ]
+    );
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk?.candidateValue).toBeNull();
+    expect(committedCandidates).toEqual([]);
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings.join(" ") : ""
+    ).toContain("conflicting evidence also supports the current official value");
+  });
+
+  it("keeps a fresh risk contradiction in bounded retrieval and reconciles selected assertions together", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const broadContent = (label: string) => [
+      `${label}: Alex moved to Subiaco.`,
+      "Alex is considering High Growth.",
+      "The home purchase goal remains active.",
+      "Employer changed to New Energy Ltd.",
+      "Annual income increased."
+    ];
+    const { harness, committedCandidates } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+
+          return createExtractionResult([
+            input.sourceRecordId === "source-new-risk-current"
+              ? {
+                  ...createCandidateFact("RISK_PROFILE", "Balanced"),
+                  evidence: "Alex has decided to remain Balanced."
+                }
+              : {
+                  ...createCandidateFact("RISK_PROFILE", "High Growth"),
+                  evidence: "Alex is considering High Growth."
+                }
+          ]);
+        }
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-broad-a",
+          observedAt: new Date("2026-06-01T00:00:00.000Z"),
+          content: broadContent("A")
+        }),
+        createLegacySourceRecord({
+          id: "source-broad-b",
+          observedAt: new Date("2026-06-02T00:00:00.000Z"),
+          content: broadContent("B")
+        }),
+        createLegacySourceRecord({
+          id: "source-broad-c",
+          observedAt: new Date("2026-06-03T00:00:00.000Z"),
+          content: broadContent("C")
+        }),
+        createLegacySourceRecord({
+          id: "source-new-risk-current",
+          observedAt: new Date("2026-06-04T00:00:00.000Z"),
+          content: ["Alex has decided to remain Balanced."]
+        })
+      ]
+    );
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(calls.map((call) => call.sourceRecordId)).toContain(
+      "source-new-risk-current"
+    );
+    expect(calls).toHaveLength(3);
+    expect(risk?.candidateValue).toBeNull();
+    expect(committedCandidates).toEqual([]);
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings.join(" ") : ""
+    ).toContain("conflicting evidence also supports the current official value");
+  });
+
+  it("returns safe empty extraction metadata when no eligible source exists", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const { harness, committedCandidates } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+          return createExtractionResult([]);
+        }
+      },
+      undefined,
+      []
+    );
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([]);
+    expect(committedCandidates).toEqual([]);
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings : []
+    ).toContain("No relevant source was available for extraction.");
+  });
+
+  it("does not create unsupported candidates for a selected source with empty content", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const { harness, committedCandidates } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+          return createExtractionResult([
+            createCandidateFact("RISK_PROFILE", "High Growth")
+          ]);
+        }
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-empty-risk",
+          title: "Risk profile note",
+          summary: "Risk profile discussed.",
+          content: []
+        })
+      ]
+    );
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([]);
+    expect(committedCandidates).toEqual([]);
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings.join(" ") : ""
+    ).toContain("Selected source source-empty-risk had no extractable text.");
+  });
+
+  it("prevents the preparation commit when one selected extraction fails", async () => {
+    const calls: CandidateFactExtractionInput[] = [];
+    const { harness, committedCandidates, review } = createHarness(
+      {
+        extract: async (input) => {
+          calls.push(input);
+          if (input.sourceRecordId === "source-risk-failure") {
+            throw new AiError("AI_INPUT_TOO_LARGE");
+          }
+
+          return createExtractionResult([
+            createCandidateFact("ADDRESS", "Fremantle")
+          ]);
+        }
+      },
+      undefined,
+      [
+        createLegacySourceRecord({
+          id: "source-address-success",
+          content: ["Alex moved to Fremantle."]
+        }),
+        createLegacySourceRecord({
+          id: "source-risk-failure",
+          content: ["Alex is considering High Growth."]
+        })
+      ]
+    );
+    const originalAddressCandidate = review.clientFacts.find(
+      (fact) => fact.id === "fact-address"
+    )?.candidateValue;
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+
+    expect(result.ok).toBe(false);
+    expect(calls.map((call) => call.sourceRecordId).sort()).toEqual([
+      "source-address-success",
+      "source-risk-failure"
+    ]);
+    expect(committedCandidates).toEqual([]);
+    expect(
+      review.clientFacts.find((fact) => fact.id === "fact-address")
+        ?.candidateValue
+    ).toBe(originalAddressCandidate);
   });
 
   it("ingest-client-document validates and stores one text upload without leaking document text in the trace", async () => {
