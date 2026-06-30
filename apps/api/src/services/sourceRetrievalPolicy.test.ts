@@ -23,6 +23,13 @@ const createSource = (
   ...overrides
 });
 
+const broadMatchContent = (label: string) => [
+  `${label}: Alex moved to Subiaco.`,
+  "The home purchase goal remains active.",
+  "Employer changed to New Energy Ltd.",
+  "Annual income increased."
+];
+
 describe("source retrieval policy", () => {
   it("sorts by deterministic relevance score, observed date, and source id", () => {
     const sources = [
@@ -69,6 +76,171 @@ describe("source retrieval policy", () => {
 
     expect(selectRelevantSources(sources, undefined, 2)).toHaveLength(2);
     expect(selectRelevantSources(sources)).toHaveLength(maxRetrievedSourceCount);
+  });
+
+  it("retains a newer risk-profile source when older broad sources score higher", () => {
+    const sources = [
+      createSource("source-broad-a", broadMatchContent("A"), {
+        observedAt: "2026-06-01T00:00:00.000Z"
+      }),
+      createSource("source-broad-b", broadMatchContent("B"), {
+        observedAt: "2026-06-02T00:00:00.000Z"
+      }),
+      createSource("source-broad-c", broadMatchContent("C"), {
+        observedAt: "2026-06-03T00:00:00.000Z"
+      }),
+      createSource("source-new-risk", ["Alex has decided to remain Balanced."], {
+        observedAt: "2026-06-04T00:00:00.000Z"
+      })
+    ];
+
+    const selectedIds = selectRelevantSources(sources).map((item) => item.source.id);
+
+    expect(selectedIds).toContain("source-new-risk");
+    expect(selectedIds).toHaveLength(maxRetrievedSourceCount);
+  });
+
+  it("retains a newer address source when older broad sources score higher", () => {
+    const sources = [
+      createSource("source-broad-a", broadMatchContent("A"), {
+        observedAt: "2026-06-01T00:00:00.000Z"
+      }),
+      createSource("source-broad-b", broadMatchContent("B"), {
+        observedAt: "2026-06-02T00:00:00.000Z"
+      }),
+      createSource("source-broad-c", broadMatchContent("C"), {
+        observedAt: "2026-06-03T00:00:00.000Z"
+      }),
+      createSource("source-new-address", ["Alex is now living in Fremantle."], {
+        observedAt: "2026-06-04T00:00:00.000Z"
+      })
+    ];
+
+    expect(selectRelevantSources(sources).map((item) => item.source.id)).toContain(
+      "source-new-address"
+    );
+  });
+
+  it("retains separate newest address and risk-profile sources with one global fill slot", () => {
+    const sources = [
+      createSource("source-global-a", broadMatchContent("A"), {
+        observedAt: "2026-06-01T00:00:00.000Z"
+      }),
+      createSource("source-global-b", broadMatchContent("B"), {
+        observedAt: "2026-06-02T00:00:00.000Z"
+      }),
+      createSource("source-new-address", ["Alex is now living in Joondalup."], {
+        observedAt: "2026-06-05T00:00:00.000Z"
+      }),
+      createSource("source-new-risk", ["Alex is considering High Growth."], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      })
+    ];
+
+    const selectedIds = selectRelevantSources(sources).map((item) => item.source.id);
+
+    expect(selectedIds).toEqual([
+      "source-global-b",
+      "source-new-risk",
+      "source-new-address"
+    ]);
+  });
+
+  it("deduplicates one source protected for both high-impact fields and fills deterministically", () => {
+    const sources = [
+      createSource("source-protected-both", [
+        "Alex moved to Fremantle.",
+        "Alex is considering High Growth."
+      ], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      }),
+      createSource("source-fill-a", ["Employer changed to New Energy Ltd."], {
+        observedAt: "2026-06-04T00:00:00.000Z"
+      }),
+      createSource("source-fill-b", ["Annual income increased."], {
+        observedAt: "2026-06-05T00:00:00.000Z"
+      }),
+      createSource("source-fill-c", ["Superannuation balance increased."], {
+        observedAt: "2026-06-03T00:00:00.000Z"
+      })
+    ];
+
+    expect(selectRelevantSources(sources).map((item) => item.source.id)).toEqual([
+      "source-protected-both",
+      "source-fill-b",
+      "source-fill-a"
+    ]);
+  });
+
+  it("keeps existing global ranking when no high-impact fields match", () => {
+    const sources = [
+      createSource("source-income", ["Annual income increased."], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      }),
+      createSource("source-employment-goal", [
+        "Employer changed to New Energy Ltd.",
+        "The property goal remains active."
+      ], {
+        observedAt: "2026-06-01T00:00:00.000Z"
+      }),
+      createSource("source-super", ["Superannuation balance increased."], {
+        observedAt: "2026-06-05T00:00:00.000Z"
+      })
+    ];
+
+    expect(selectRelevantSources(sources).map((item) => item.source.id)).toEqual([
+      "source-employment-goal",
+      "source-income",
+      "source-super"
+    ]);
+  });
+
+  it("uses score then id to break protected-source date ties", () => {
+    const sources = [
+      createSource("source-risk-low", ["Alex is considering High Growth."], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      }),
+      createSource("source-risk-high", [
+        "Alex is considering High Growth.",
+        "The home purchase goal remains active."
+      ], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      }),
+      createSource("source-address-b", ["Alex moved to Subiaco."], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      }),
+      createSource("source-address-a", ["Alex moved to Fremantle."], {
+        observedAt: "2026-06-06T00:00:00.000Z"
+      })
+    ];
+
+    const selectedIds = selectRelevantSources(sources, undefined, 2).map(
+      (item) => item.source.id
+    );
+
+    expect(selectedIds).toEqual(["source-risk-high", "source-address-a"]);
+  });
+
+  it("does not mutate input arrays while protecting high-impact sources", () => {
+    const sources = [
+      createSource("source-broad-c", broadMatchContent("C"), {
+        observedAt: "2026-06-03T00:00:00.000Z"
+      }),
+      createSource("source-new-risk", ["Alex has decided to remain Balanced."], {
+        observedAt: "2026-06-04T00:00:00.000Z"
+      }),
+      createSource("source-broad-a", broadMatchContent("A"), {
+        observedAt: "2026-06-01T00:00:00.000Z"
+      }),
+      createSource("source-broad-b", broadMatchContent("B"), {
+        observedAt: "2026-06-02T00:00:00.000Z"
+      })
+    ];
+    const originalOrder = sources.map((source) => source.id);
+
+    selectRelevantSources(sources);
+
+    expect(sources.map((source) => source.id)).toEqual(originalOrder);
   });
 
   it("selects a relevant adviser meeting note", () => {

@@ -10,6 +10,10 @@ export type RetrievedSource = {
 };
 
 export const maxRetrievedSourceCount = 3;
+const protectedSourceFields: SupportedCandidateField[] = [
+  "ADDRESS",
+  "RISK_PROFILE"
+];
 
 type FieldHintPolicy = {
   field: SupportedCandidateField;
@@ -160,6 +164,42 @@ const sortRetrievedSources = (sources: RetrievedSource[]) =>
     return first.source.id.localeCompare(second.source.id);
   });
 
+const sortProtectedSourcesForField = (sources: RetrievedSource[]) =>
+  [...sources].sort((first, second) => {
+    const observedDifference =
+      sourceTime(second.source) - sourceTime(first.source);
+    if (observedDifference !== 0) {
+      return observedDifference;
+    }
+
+    if (first.score !== second.score) {
+      return second.score - first.score;
+    }
+
+    return first.source.id.localeCompare(second.source.id);
+  });
+
+const newestSourceForField = (
+  sources: readonly RetrievedSource[],
+  field: SupportedCandidateField
+) =>
+  sortProtectedSourcesForField(
+    sources.filter((source) => source.relevantFields.includes(field))
+  )[0];
+
+const selectProtectedSources = (sources: readonly RetrievedSource[]) => {
+  const selected = new Map<string, RetrievedSource>();
+
+  for (const field of protectedSourceFields) {
+    const source = newestSourceForField(sources, field);
+    if (source) {
+      selected.set(source.source.id, source);
+    }
+  }
+
+  return [...selected.values()];
+};
+
 const fallbackCandidates = (sourceRecords: readonly SourceRecordDto[]) =>
   [...sourceRecords]
     .filter(isExtractionEligibleSource)
@@ -202,7 +242,21 @@ export const selectRelevantSources = (
       };
     });
 
-  const selected = sortRetrievedSources(scored).slice(0, maxSources);
+  const selectedById = new Map<string, RetrievedSource>();
+
+  for (const source of selectProtectedSources(scored).slice(0, maxSources)) {
+    selectedById.set(source.source.id, source);
+  }
+
+  for (const source of sortRetrievedSources(scored)) {
+    if (selectedById.size >= maxSources) {
+      break;
+    }
+
+    selectedById.set(source.source.id, source);
+  }
+
+  const selected = sortRetrievedSources([...selectedById.values()]);
   if (selected.length > 0 || maxSources <= 0) {
     return selected;
   }
