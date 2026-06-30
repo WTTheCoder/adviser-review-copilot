@@ -79,6 +79,31 @@ Supporting architecture notes:
 - [Controlled model boundary](docs/architecture/model-boundary.md)
 - [Controlled skills and execution harness](docs/architecture/skills-and-harness.md)
 
+## Agent Context And Memory Lifecycle
+
+The demo uses explicit, bounded context handling rather than conversational memory, embeddings, or vector search. The current architecture separates:
+
+| Category | Meaning in this repo | Examples |
+| --- | --- | --- |
+| Working context | Temporary data used only during one execution | loaded client context, selected sources, extraction results, trusted candidate assertions, reconciliation intermediates, upload parsing data, in-memory execution events |
+| Episodic history | Durable records of what happened | `WorkflowRun`, `WorkflowStep`, `AdviserDecision`, upload and preparation events, decision snapshots |
+| Retrievable knowledge | Durable source material fetched when relevant | legacy CRM records, annual review records, adviser meeting notes, uploaded normalized documents |
+| Persistent client state | Authoritative or pending domain state | official facts, previous facts, candidate facts, explicit fact provenance |
+| Workflow state | Operational state, not memory | preparation status, ready-for-review status, requires-confirmation or requires-approval status, refresh-required responses, mutation guards |
+
+Review preparation uses deterministic just-in-time retrieval:
+
+```text
+review concerns
+-> deterministic bounded source selection
+-> source-specific extraction
+-> trusted provenance attachment
+-> combined deterministic reconciliation
+-> candidate projection
+```
+
+Source retrieval is application-owned policy over already-loaded trusted source records. It is not semantic search, conversational memory, summarisation, automatic deletion, memory decay, or a production retention system. Retention intent is documented at the model/type level: client fact state is permanent demo state, workflow and adviser decisions are audit/history, source records are review/source history, and raw parser/provider intermediates remain transient.
+
 ## Trust And Safety Boundaries
 
 - Model output is untrusted proposal data.
@@ -89,6 +114,7 @@ Supporting architecture notes:
 - Skills can call only explicitly allowlisted tools.
 - High-impact changes require adviser approval before becoming official.
 - Contradictory evidence is reconciled by deterministic application code, not by candidate order and not by asking the model to choose.
+- Source retrieval is deterministic and bounded before extraction; the model cannot request additional sources.
 - Post-commit refresh failure is reported as a saved decision requiring reload, not as a rolled-back mutation.
 - Uploaded content, extracted PDF text, and filenames are treated as untrusted and displayed as plain text.
 - Parser and provider errors are mapped to application-owned safe errors.
@@ -270,7 +296,7 @@ Known limitations:
 - Legacy provenance mirror fields remain temporarily for staged compatibility.
 - No claim that all commercial CRM schemas are supported.
 - PDF parsing is timeout-bounded but not process-isolated.
-- No malware scanning, object storage, retention policy, production observability, or incident response.
+- No malware scanning, object storage, database-backed retention metadata, automatic archiving/deletion, production observability, or incident response.
 
 ## Design Principles
 
