@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { getEvidenceExplanation } from "../domain/factPresentation.js";
 import type { AdviserAction, ClientFact } from "../types/demo.js";
+import { EvidenceDrawer } from "./EvidenceDrawer.js";
 
 const staleAddressPhrase = "remains a candidate fact";
 const staleAddressUntilPhrase = "until an adviser confirms";
@@ -15,10 +18,24 @@ const createFact = (overrides: Partial<ClientFact> = {}): ClientFact => ({
   officialValue: "East Perth",
   candidateValue: "Subiaco",
   previousValue: null,
-  sourceRecordId: "source-meeting-note",
-  sourceDocument: "Adviser Meeting Note",
-  observedAt: "2026-06-04T00:00:00.000Z",
-  observedDate: "4 June 2026",
+  sourceRecordId: "source-annual-review",
+  sourceDocument: "Annual Review",
+  observedAt: "2025-11-16T00:00:00.000Z",
+  observedDate: "16 November 2025",
+  officialSourceRecordId: "source-annual-review",
+  officialSourceDocument: "Annual Review",
+  officialObservedAt: "2025-11-16T00:00:00.000Z",
+  officialObservedDate: "16 November 2025",
+  previousSourceRecordId: null,
+  previousSourceDocument: null,
+  previousObservedAt: null,
+  previousObservedDate: null,
+  candidateSourceRecordId: "source-meeting-note",
+  candidateSourceDocument: "Adviser Meeting Note",
+  candidateObservedAt: "2026-06-04T00:00:00.000Z",
+  candidateObservedDate: "4 June 2026",
+  candidateEvidence:
+    "Alex may have moved to Subiaco, but the address has not been confirmed.",
   confidence: "Medium",
   lifecycleStatus: "NEEDS_CONFIRMATION",
   status: "Needs confirmation",
@@ -208,5 +225,121 @@ describe("Evidence drawer explanation mapping", () => {
 
     expect(explanation).toContain("adviser confirmed Subiaco");
     expectNoCompletedStaleCopy(explanation);
+  });
+
+  it("shows KEEP_CURRENT history after the active candidate is cleared", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EvidenceDrawer, {
+        fact: createFact({
+          id: "fact-risk-profile",
+          field: "Risk profile",
+          currentLabel: "Official value",
+          currentValue: "Balanced",
+          officialValue: "Balanced",
+          candidateValue: null,
+          lifecycleStatus: "CURRENT",
+          status: "Current"
+        }),
+        adviserAction: {
+          ...createAction("fact-risk-profile", "KEEP_CURRENT", "High Growth"),
+          decisionHistory: [
+            {
+              decision: "KEEP_CURRENT",
+              actor: "demo-adviser",
+              note: null,
+              candidateValue: "High Growth",
+              candidateSourceDocument: "Adviser Meeting Note",
+              candidateObservedDate: "4 June 2026",
+              candidateEvidence: "Evidence for High Growth",
+              officialValueBefore: "Balanced",
+              resultingOfficialValue: "Balanced",
+              createdAt: "2026-06-04T00:00:00.000Z"
+            }
+          ]
+        },
+        onClose: () => undefined
+      })
+    );
+
+    expect(markup).toContain("Decision history");
+    expect(markup).toContain("KEEP_CURRENT");
+    expect(markup).toContain("High Growth");
+    expect(markup).toContain("Evidence for High Growth");
+    expect(markup).toContain("Balanced to Balanced");
+  });
+
+  it("shows LEAVE_UNVERIFIED history after the active candidate is cleared", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EvidenceDrawer, {
+        fact: createFact({
+          candidateValue: null,
+          lifecycleStatus: "CURRENT",
+          status: "Current"
+        }),
+        adviserAction: {
+          ...createAction("fact-address", "LEAVE_UNVERIFIED", "Subiaco"),
+          decisionHistory: [
+            {
+              decision: "LEAVE_UNVERIFIED",
+              actor: "demo-adviser",
+              note: null,
+              candidateValue: "Subiaco",
+              candidateSourceDocument: "Adviser Meeting Note",
+              candidateObservedDate: "4 June 2026",
+              candidateEvidence: "Subiaco was not verified.",
+              officialValueBefore: "East Perth",
+              resultingOfficialValue: "East Perth",
+              createdAt: "2026-06-04T00:00:00.000Z"
+            }
+          ]
+        },
+        onClose: () => undefined
+      })
+    );
+
+    expect(markup).toContain("LEAVE_UNVERIFIED");
+    expect(markup).toContain("Subiaco");
+    expect(markup).toContain("Subiaco was not verified.");
+    expect(markup).toContain("East Perth to East Perth");
+  });
+
+  it("shows approval history with before, candidate and resulting values", () => {
+    const markup = renderToStaticMarkup(
+      createElement(EvidenceDrawer, {
+        fact: createFact({
+          id: "fact-risk-profile",
+          field: "Risk profile",
+          currentLabel: "Official value",
+          currentValue: "High Growth",
+          officialValue: "High Growth",
+          candidateValue: null,
+          previousValue: "Balanced",
+          lifecycleStatus: "CURRENT",
+          status: "Current"
+        }),
+        adviserAction: {
+          ...createAction("fact-risk-profile", "APPROVE", "High Growth"),
+          decisionHistory: [
+            {
+              decision: "APPROVE",
+              actor: "demo-adviser",
+              note: null,
+              candidateValue: "High Growth",
+              candidateSourceDocument: "Adviser Meeting Note",
+              candidateObservedDate: "4 June 2026",
+              candidateEvidence: "Evidence for High Growth",
+              officialValueBefore: "Balanced",
+              resultingOfficialValue: "High Growth",
+              createdAt: "2026-06-04T00:00:00.000Z"
+            }
+          ]
+        },
+        onClose: () => undefined
+      })
+    );
+
+    expect(markup).toContain("APPROVE");
+    expect(markup).toContain("High Growth");
+    expect(markup).toContain("Balanced to High Growth");
   });
 });

@@ -9,7 +9,6 @@ const fixtureCandidateExpectationSchema = z
     acceptedValues: z.array(z.string().min(1)).nonempty(),
     confidence: z.enum(["LOW", "MEDIUM", "HIGH"]),
     requiredEvidence: z.string().min(1),
-    sourceRecordId: z.string().min(1),
     expectedHumanReview: z.literal(true)
   })
   .strict();

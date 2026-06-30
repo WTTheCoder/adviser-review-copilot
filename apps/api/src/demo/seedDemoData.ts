@@ -4,7 +4,7 @@ import {
   WorkflowRunStatus,
   WorkflowStepStatus
 } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 export const DEMO_CLIENT_ID = "demo-alex-taylor";
 
@@ -63,6 +63,10 @@ const facts = [
     previousValue: "ABC Mining",
     sourceRecordId: "source-annual-review",
     observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    previousSourceRecordId: "source-legacy-crm",
+    previousObservedAt: new Date("2023-05-10T00:00:00.000Z"),
     confidence: "High",
     lifecycleStatus: LifecycleStatus.CURRENT,
     explanation:
@@ -75,6 +79,10 @@ const facts = [
     previousValue: "AUD 110,000",
     sourceRecordId: "source-annual-review",
     observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    previousSourceRecordId: "source-legacy-crm",
+    previousObservedAt: new Date("2023-05-10T00:00:00.000Z"),
     confidence: "High",
     lifecycleStatus: LifecycleStatus.CURRENT,
     explanation:
@@ -87,6 +95,10 @@ const facts = [
     previousValue: "AUD 125,000",
     sourceRecordId: "source-annual-review",
     observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    previousSourceRecordId: "source-legacy-crm",
+    previousObservedAt: new Date("2023-05-10T00:00:00.000Z"),
     confidence: "High",
     lifecycleStatus: LifecycleStatus.CURRENT,
     explanation:
@@ -97,8 +109,13 @@ const facts = [
     field: "Address",
     officialValue: "East Perth",
     candidateValue: "Subiaco",
-    sourceRecordId: "source-meeting-note",
-    observedAt: new Date("2026-06-04T00:00:00.000Z"),
+    sourceRecordId: "source-annual-review",
+    observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    candidateSourceRecordId: "source-meeting-note",
+    candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+    candidateEvidence: "Alex may have moved to Subiaco, but the address has not been confirmed.",
     confidence: "Medium",
     lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION,
     explanation:
@@ -111,6 +128,10 @@ const facts = [
     previousValue: "Buy a home within five years",
     sourceRecordId: "source-annual-review",
     observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    previousSourceRecordId: "source-legacy-crm",
+    previousObservedAt: new Date("2023-05-10T00:00:00.000Z"),
     confidence: "High",
     lifecycleStatus: LifecycleStatus.CURRENT,
     explanation:
@@ -121,8 +142,14 @@ const facts = [
     field: "Risk profile",
     officialValue: "Balanced",
     candidateValue: "Growth-oriented",
-    sourceRecordId: "source-meeting-note",
-    observedAt: new Date("2026-06-04T00:00:00.000Z"),
+    sourceRecordId: "source-annual-review",
+    observedAt: new Date("2025-11-16T00:00:00.000Z"),
+    officialSourceRecordId: "source-annual-review",
+    officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    candidateSourceRecordId: "source-meeting-note",
+    candidateObservedAt: new Date("2026-06-04T00:00:00.000Z"),
+    candidateEvidence:
+      "Alex is considering a more growth-oriented investment approach.",
     confidence: "Medium",
     lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
     explanation:
@@ -150,7 +177,36 @@ export const workflowSteps = [
   }
 ] as const;
 
-export const seedDemoData = async (client: PrismaClient) => {
+export const seedDemoData = async (client: Prisma.TransactionClient) => {
+  const existingClient = await client.client.findUnique({
+    where: { id: DEMO_CLIENT_ID },
+    select: { id: true }
+  });
+
+  if (existingClient) {
+    await client.client.update({
+      where: { id: DEMO_CLIENT_ID },
+      data: {
+        name: "Alex Taylor",
+        adviserName: "Jordan Lee",
+        reviewYear: 2026,
+        reviewStatus: "Preparation in progress",
+        mutationEpoch: { increment: 1 }
+      }
+    });
+  } else {
+    await client.client.create({
+      data: {
+        id: DEMO_CLIENT_ID,
+        name: "Alex Taylor",
+        adviserName: "Jordan Lee",
+        reviewYear: 2026,
+        reviewStatus: "Preparation in progress",
+        mutationEpoch: 0
+      }
+    });
+  }
+
   await client.adviserDecision.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
@@ -162,19 +218,6 @@ export const seedDemoData = async (client: PrismaClient) => {
   });
   await client.sourceRecord.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
-  });
-  await client.client.deleteMany({
-    where: { id: DEMO_CLIENT_ID }
-  });
-
-  await client.client.create({
-    data: {
-      id: DEMO_CLIENT_ID,
-      name: "Alex Taylor",
-      adviserName: "Jordan Lee",
-      reviewYear: 2026,
-      reviewStatus: "Preparation in progress"
-    }
   });
 
   for (const sourceRecord of sourceRecords) {

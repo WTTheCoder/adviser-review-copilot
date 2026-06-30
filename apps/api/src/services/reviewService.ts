@@ -4,12 +4,19 @@ import {
   SourceRecordType,
   WorkflowRunStatus
 } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
-import type { PrismaClient, WorkflowStepStatus } from "@prisma/client";
+import type {
+  Prisma,
+  PrismaClient,
+  WorkflowStepStatus
+} from "@prisma/client";
 import {
   uploadSourceMetadataSchema,
   type AdviserDecisionPayload,
+  type AdviserDecisionSnapshotDto,
   type ClientFactDto,
+  type DecisionMutationResult,
   type DocumentUploadResult,
   type ReviewResponse,
   type SourceRecordDto
@@ -28,12 +35,50 @@ import {
 export type ExtractedCandidateProjection = {
   field: "ADDRESS" | "RISK_PROFILE" | "FINANCIAL_GOAL" | "EMPLOYMENT" | "ANNUAL_INCOME" | "SUPERANNUATION";
   proposedValue: string;
+  evidence: string;
   applicationStatus:
     | "NEEDS_CONFIRMATION"
     | "REQUIRES_ADVISER_APPROVAL"
     | "CANDIDATE_REVIEW";
   sourceRecordId: string;
   observedDate: string;
+};
+
+export class DecisionConflictError extends Error {
+  constructor() {
+    super("DECISION_CONFLICT");
+    this.name = "DecisionConflictError";
+  }
+}
+
+export class ClientMutationConflictError extends Error {
+  constructor() {
+    super("CLIENT_MUTATION_CONFLICT");
+    this.name = "ClientMutationConflictError";
+  }
+}
+
+export class InvalidDecisionForFactError extends Error {
+  constructor() {
+    super("INVALID_DECISION_FOR_FACT");
+    this.name = "InvalidDecisionForFactError";
+  }
+}
+
+export type ReviewServiceHooks = {
+  afterDecisionFactRead?: () => Promise<void>;
+  beforeDecisionAuditWrite?: () => Promise<void>;
+  beforeDecisionResponseRead?: () => Promise<void>;
+  beforePreparationCommit?: () => Promise<void>;
+  afterPreparationWorkflowRunWrite?: () => Promise<void>;
+  beforeCandidateProjectionWrite?: () => Promise<void>;
+  beforeResetCommit?: () => Promise<void>;
+};
+
+export type PreparedWorkflowStep = {
+  label: string;
+  status: WorkflowStepStatus;
+  detail?: string | null;
 };
 
 const meaningfulChanges = [
@@ -119,6 +164,25 @@ const contentToUpload = (content: unknown): SourceRecordDto["upload"] => {
 const toUtcDate = (calendarDate: string) =>
   new Date(`${calendarDate}T00:00:00.000Z`);
 
+const compareDates = (first: Date | null, second: Date | null) => {
+  if (!first || !second) {
+    return null;
+  }
+
+  const firstTime = first.getTime();
+  const secondTime = second.getTime();
+
+  if (firstTime < secondTime) {
+    return -1;
+  }
+
+  if (firstTime > secondTime) {
+    return 1;
+  }
+
+  return 0;
+};
+
 const fieldProjectionTargets = {
   ADDRESS: {
     factId: "fact-address",
@@ -141,6 +205,10 @@ const clearCandidateExplanation = (field: string) =>
 
 type LegacyAdapter = ReturnType<typeof createLegacyCrmAdapter>;
 
+const demoDecisionActor = "demo-adviser";
+const decisionSavedRefreshMessage =
+  "Decision was saved. Refresh to load the latest review.";
+
 export type FactForReview = {
   id: string;
   field: string;
@@ -149,17 +217,90 @@ export type FactForReview = {
   previousValue: string | null;
   sourceRecordId: string;
   observedAt: Date;
+  officialSourceRecordId: string;
+  officialObservedAt: Date;
+  previousSourceRecordId: string | null;
+  previousObservedAt: Date | null;
+  candidateSourceRecordId: string | null;
+  candidateObservedAt: Date | null;
+  candidateEvidence: string | null;
   confidence: string;
   lifecycleStatus: LifecycleStatus;
   explanation: string;
-  sourceRecord: {
+  officialSourceRecord: {
     title: string;
   };
+  previousSourceRecord: {
+    title: string;
+  } | null;
+  candidateSourceRecord: {
+    title: string;
+  } | null;
   adviserDecisions: Array<{
     decisionType: DecisionType;
     note: string | null;
+    actor: string | null;
+    candidateValue: string | null;
+    candidateSourceRecordId: string | null;
+    candidateObservedAt: Date | null;
+    candidateEvidence: string | null;
+    officialValueBefore: string | null;
+    officialSourceRecordIdBefore: string | null;
+    officialObservedAtBefore: Date | null;
+    resultingOfficialValue: string | null;
+    resultingOfficialSourceRecordId: string | null;
+    resultingOfficialObservedAt: Date | null;
     createdAt: Date;
   }>;
+};
+
+const mapDecisionSnapshot = (
+  decision: FactForReview["adviserDecisions"][number],
+  sourceTitleById: ReadonlyMap<string, string>
+): AdviserDecisionSnapshotDto => {
+  const candidateValue =
+    decision.candidateValue ?? decodeDecisionCandidateValue(decision.note);
+  const candidateSourceDocument = decision.candidateSourceRecordId
+    ? sourceTitleById.get(decision.candidateSourceRecordId) ?? null
+    : null;
+  const officialSourceDocumentBefore = decision.officialSourceRecordIdBefore
+    ? sourceTitleById.get(decision.officialSourceRecordIdBefore) ?? null
+    : null;
+  const resultingOfficialSourceDocument =
+    decision.resultingOfficialSourceRecordId
+      ? sourceTitleById.get(decision.resultingOfficialSourceRecordId) ?? null
+      : null;
+
+  return {
+    decision: decision.decisionType,
+    actor: decision.actor,
+    note: decision.note,
+    candidateValue,
+    candidateSourceRecordId: decision.candidateSourceRecordId,
+    candidateSourceDocument,
+    candidateObservedAt: decision.candidateObservedAt?.toISOString() ?? null,
+    candidateObservedDate: decision.candidateObservedAt
+      ? formatDate(decision.candidateObservedAt)
+      : null,
+    candidateEvidence: decision.candidateEvidence,
+    officialValueBefore: decision.officialValueBefore,
+    officialSourceRecordIdBefore: decision.officialSourceRecordIdBefore,
+    officialSourceDocumentBefore,
+    officialObservedAtBefore:
+      decision.officialObservedAtBefore?.toISOString() ?? null,
+    officialObservedDateBefore: decision.officialObservedAtBefore
+      ? formatDate(decision.officialObservedAtBefore)
+      : null,
+    resultingOfficialValue: decision.resultingOfficialValue,
+    resultingOfficialSourceRecordId: decision.resultingOfficialSourceRecordId,
+    resultingOfficialSourceDocument,
+    resultingOfficialObservedAt:
+      decision.resultingOfficialObservedAt?.toISOString() ?? null,
+    resultingOfficialObservedDate: decision.resultingOfficialObservedAt
+      ? formatDate(decision.resultingOfficialObservedAt)
+      : null,
+    createdAt: decision.createdAt.toISOString()
+  };
 };
 
 export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
@@ -170,10 +311,27 @@ export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
   officialValue: fact.officialValue,
   candidateValue: fact.candidateValue,
   previousValue: fact.previousValue,
-  sourceRecordId: fact.sourceRecordId,
-  sourceDocument: fact.sourceRecord.title,
-  observedAt: fact.observedAt.toISOString(),
-  observedDate: formatDate(fact.observedAt),
+  sourceRecordId: fact.officialSourceRecordId,
+  sourceDocument: fact.officialSourceRecord.title,
+  observedAt: fact.officialObservedAt.toISOString(),
+  observedDate: formatDate(fact.officialObservedAt),
+  officialSourceRecordId: fact.officialSourceRecordId,
+  officialSourceDocument: fact.officialSourceRecord.title,
+  officialObservedAt: fact.officialObservedAt.toISOString(),
+  officialObservedDate: formatDate(fact.officialObservedAt),
+  previousSourceRecordId: fact.previousSourceRecordId,
+  previousSourceDocument: fact.previousSourceRecord?.title ?? null,
+  previousObservedAt: fact.previousObservedAt?.toISOString() ?? null,
+  previousObservedDate: fact.previousObservedAt
+    ? formatDate(fact.previousObservedAt)
+    : null,
+  candidateSourceRecordId: fact.candidateSourceRecordId,
+  candidateSourceDocument: fact.candidateSourceRecord?.title ?? null,
+  candidateObservedAt: fact.candidateObservedAt?.toISOString() ?? null,
+  candidateObservedDate: fact.candidateObservedAt
+    ? formatDate(fact.candidateObservedAt)
+    : null,
+  candidateEvidence: fact.candidateEvidence,
   confidence:
     fact.confidence === "High" || fact.confidence === "Medium"
       ? fact.confidence
@@ -211,7 +369,8 @@ export const buildSummaryMetrics = (
 
 export const createReviewService = (
   client: PrismaClient,
-  clientOperations = new ClientOperationCoordinator()
+  clientOperations = new ClientOperationCoordinator(),
+  hooks: ReviewServiceHooks = {}
 ) => {
   const legacyAdapter = createLegacyCrmAdapter(client);
 
@@ -246,6 +405,9 @@ export const createReviewService = (
       lifecycleStatus: record.lifecycleStatus,
       upload: contentToUpload(record.content)
     }));
+    const sourceTitleById = new Map(
+      sourceRecordDtos.map((record) => [record.id, record.title])
+    );
 
     const factDtos: ClientFactDto[] = facts.map(mapFactToDto);
     const meaningfulChangeItems = buildMeaningfulChanges(facts);
@@ -266,6 +428,9 @@ export const createReviewService = (
       meaningfulChanges: meaningfulChangeItems,
       adviserActions: actionFacts.map((fact) => {
         const latestDecision = fact.adviserDecisions[0] ?? null;
+        const decisionHistory = fact.adviserDecisions.map((decision) =>
+          mapDecisionSnapshot(decision, sourceTitleById)
+        );
         const isAddress = fact.id === "fact-address";
         return {
           id: isAddress ? "confirm-address" : "review-risk-profile",
@@ -285,15 +450,9 @@ export const createReviewService = (
           primaryLabel: isAddress ? "Confirm" : "Approve",
           secondaryLabel: isAddress ? "Leave unverified" : "Keep current",
           latestDecision: latestDecision
-            ? {
-                decision: latestDecision.decisionType,
-                note: latestDecision.note,
-                candidateValue: decodeDecisionCandidateValue(
-                  latestDecision.note
-                ),
-                createdAt: latestDecision.createdAt.toISOString()
-              }
-            : null
+            ? mapDecisionSnapshot(latestDecision, sourceTitleById)
+            : null,
+          decisionHistory
         };
       }),
       workflowTrace:
@@ -305,107 +464,295 @@ export const createReviewService = (
     };
   };
 
-  const prepareReview = async (clientId: string) => {
-    await client.$transaction(async (transaction) => {
-      await transaction.workflowRun.deleteMany({ where: { clientId } });
-      await transaction.client.update({
-        where: { id: clientId },
-        data: { reviewStatus: "Ready for adviser review" }
-      });
-      const run = await transaction.workflowRun.create({
-        data: {
-          id: `workflow-${clientId}-${Date.now()}`,
+  const captureClientMutationEpoch = async (clientId: string) => {
+    const clientRecord = await client.client.findUnique({
+      where: { id: clientId },
+      select: { mutationEpoch: true }
+    });
+
+    if (!clientRecord) {
+      throw new Error("CLIENT_NOT_FOUND");
+    }
+
+    return clientRecord.mutationEpoch;
+  };
+
+  const lockClientMutationEpoch = async (
+    transaction: Prisma.TransactionClient,
+    clientId: string,
+    expectedMutationEpoch: number,
+    data: Prisma.ClientUpdateManyMutationInput = {}
+  ) => {
+    const locked = await transaction.client.updateMany({
+      where: {
+        id: clientId,
+        mutationEpoch: expectedMutationEpoch
+      },
+      data: {
+        mutationEpoch: expectedMutationEpoch,
+        ...data
+      }
+    });
+
+    if (locked.count !== 1) {
+      throw new ClientMutationConflictError();
+    }
+  };
+
+  const applyCandidateProjectionInTransaction = async (
+    transaction: Prisma.TransactionClient,
+    clientId: string,
+    candidates: readonly ExtractedCandidateProjection[]
+  ) => {
+    const supportedCandidates = candidates.filter(
+      (candidate) =>
+        candidate.field === "ADDRESS" || candidate.field === "RISK_PROFILE"
+    );
+    const candidatesByField = new Map(
+      supportedCandidates.map((candidate) => [candidate.field, candidate])
+    );
+    const facts = await transaction.clientFact.findMany({
+      where: {
+        clientId,
+        id: {
+          in: Object.values(fieldProjectionTargets).map(
+            (target) => target.factId
+          )
+        }
+      },
+      include: {
+        adviserDecisions: {
+          orderBy: { createdAt: "desc" },
+          take: 1
+        }
+      }
+    });
+
+    await hooks.beforeCandidateProjectionWrite?.();
+
+    for (const fact of facts) {
+      const field =
+        fact.id === fieldProjectionTargets.ADDRESS.factId
+          ? "ADDRESS"
+          : "RISK_PROFILE";
+      const target = fieldProjectionTargets[field];
+      const candidate = candidatesByField.get(field);
+      const candidateObservedAt = candidate
+        ? toUtcDate(candidate.observedDate)
+        : null;
+      const candidateIsNewerThanOfficial =
+        candidate && candidateObservedAt
+          ? compareDates(candidateObservedAt, fact.officialObservedAt) === 1
+          : false;
+
+      if (candidate && !candidateIsNewerThanOfficial) {
+        continue;
+      }
+
+      const nextCandidateValue = candidate?.proposedValue ?? null;
+      const nextLifecycleStatus = candidate
+        ? target.status
+        : LifecycleStatus.CURRENT;
+      const nextCandidateSourceRecordId = candidate?.sourceRecordId ?? null;
+      const decisionStateChanged =
+        fact.candidateValue !== nextCandidateValue ||
+        fact.lifecycleStatus !== nextLifecycleStatus ||
+        fact.candidateSourceRecordId !== nextCandidateSourceRecordId ||
+        (fact.candidateObservedAt?.getTime() ?? null) !==
+          (candidateObservedAt?.getTime() ?? null) ||
+        fact.candidateEvidence !== (candidate?.evidence ?? null);
+
+      const updated = await transaction.clientFact.updateMany({
+        where: {
+          id: fact.id,
           clientId,
-          status: WorkflowRunStatus.PREPARED,
-          completedAt: new Date()
+          revision: fact.revision,
+          officialValue: fact.officialValue,
+          candidateValue: fact.candidateValue,
+          lifecycleStatus: fact.lifecycleStatus
+        },
+        data: {
+          candidateValue: nextCandidateValue,
+          candidateSourceRecordId: nextCandidateSourceRecordId,
+          candidateObservedAt,
+          candidateEvidence: candidate?.evidence ?? null,
+          lifecycleStatus: nextLifecycleStatus,
+          confidence: candidate ? target.confidence : "Low",
+          explanation: candidate
+            ? target.explanation(candidate.proposedValue)
+            : clearCandidateExplanation(fact.field),
+          ...(decisionStateChanged
+            ? { revision: { increment: 1 } }
+            : {})
         }
       });
-      await transaction.workflowStep.createMany({
-        data: workflowSteps.map((step, index) => ({
-          id: `${run.id}-step-${index + 1}`,
-          workflowRunId: run.id,
-          sequence: index + 1,
-          label: step.label,
-          status: step.status,
-          detail:
-            step.status === "ESCALATED"
-              ? "Address and risk-profile changes need adviser review."
-              : null
-        }))
-      });
-    });
 
-    return buildReviewResponse(clientId);
+      if (updated.count !== 1) {
+        throw new ClientMutationConflictError();
+      }
+    }
   };
 
-  const createWorkflowRun = async (
-    clientId: string,
-    skillName: string,
-    skillVersion: string | null
-  ) => {
-    const versionSuffix = skillVersion ? `-v${skillVersion}` : "";
-    await client.client.update({
-      where: { id: clientId },
-      data: { reviewStatus: "Ready for adviser review" }
-    });
+  const commitPreparedReview = async (input: {
+    clientId: string;
+    expectedMutationEpoch: number;
+    skillName: string;
+    skillVersion: string | null;
+    candidates: readonly ExtractedCandidateProjection[];
+    workflowSteps: readonly PreparedWorkflowStep[];
+  }) => {
+    await hooks.beforePreparationCommit?.();
 
-    return client.workflowRun.create({
-      data: {
-        id: `workflow-${clientId}-${skillName}${versionSuffix}-${Date.now()}`,
-        clientId,
-        status: WorkflowRunStatus.PREPARED,
-        completedAt: new Date()
-      },
-      select: {
-        id: true
-      }
-    });
+    await clientOperations.runClientMutation(input.clientId, () =>
+      client.$transaction(async (transaction) => {
+        await lockClientMutationEpoch(
+          transaction,
+          input.clientId,
+          input.expectedMutationEpoch,
+          { reviewStatus: "Ready for adviser review" }
+        );
+
+        const versionSuffix = input.skillVersion
+          ? `-v${input.skillVersion}`
+          : "";
+        const run = await transaction.workflowRun.create({
+          data: {
+            id: `workflow-${input.clientId}-${input.skillName}${versionSuffix}-${randomUUID()}`,
+            clientId: input.clientId,
+            status: WorkflowRunStatus.PREPARED,
+            completedAt: new Date()
+          }
+        });
+
+        await hooks.afterPreparationWorkflowRunWrite?.();
+        await applyCandidateProjectionInTransaction(
+          transaction,
+          input.clientId,
+          input.candidates
+        );
+        await transaction.workflowStep.createMany({
+          data: input.workflowSteps.map((step, index) => ({
+            id: `${run.id}-step-${index + 1}`,
+            workflowRunId: run.id,
+            sequence: index + 1,
+            label: step.label,
+            status: step.status,
+            detail: step.detail ?? null
+          }))
+        });
+      })
+    );
+
+    return buildReviewResponse(input.clientId);
   };
 
-  const recordWorkflowStep = async (input: {
-    workflowRunId: string;
-    sequence: number;
-    label: string;
-    status: WorkflowStepStatus;
-    detail?: string | null;
-  }) =>
-    client.workflowStep.create({
-      data: {
-        id: `${input.workflowRunId}-step-${input.sequence}`,
-        workflowRunId: input.workflowRunId,
-        sequence: input.sequence,
-        label: input.label,
-        status: input.status,
-        detail: input.detail ?? null
-      },
-      select: {
-        id: true
-      }
+  const prepareReview = async (clientId: string) => {
+    const expectedMutationEpoch = await captureClientMutationEpoch(clientId);
+    return commitPreparedReview({
+      clientId,
+      expectedMutationEpoch,
+      skillName: "prepare-annual-review",
+      skillVersion: "legacy",
+      candidates: [],
+      workflowSteps: workflowSteps.map((step) => ({
+        ...step,
+        detail:
+          step.status === "ESCALATED"
+            ? "Address and risk-profile changes need adviser review."
+            : null
+      }))
     });
+  };
 
   const recordDecision = async (
     clientId: string,
     factId: string,
     payload: AdviserDecisionPayload
-  ) => {
-    const fact = await client.clientFact.findFirst({
-      where: { id: factId, clientId }
-    });
-
-    if (!fact) {
-      throw new Error("FACT_NOT_FOUND");
-    }
-
-    if (!isDecisionAllowedForFact(fact, payload.decision)) {
-      throw new Error("INVALID_DECISION_FOR_FACT");
-    }
-
+  ): Promise<DecisionMutationResult> => {
     await client.$transaction(async (transaction) => {
+      const [clientRecord, fact] = await Promise.all([
+        transaction.client.findUnique({
+          where: { id: clientId },
+          select: { mutationEpoch: true }
+        }),
+        transaction.clientFact.findFirst({
+          where: { id: factId, clientId }
+        })
+      ]);
+
+      if (!clientRecord || !fact) {
+        throw new Error("FACT_NOT_FOUND");
+      }
+
+      if (!isDecisionAllowedForFact(fact, payload.decision)) {
+        throw new InvalidDecisionForFactError();
+      }
+
+      await hooks.afterDecisionFactRead?.();
+      try {
+        await lockClientMutationEpoch(
+          transaction,
+          clientId,
+          clientRecord.mutationEpoch
+        );
+      } catch (error) {
+        if (error instanceof ClientMutationConflictError) {
+          throw new DecisionConflictError();
+        }
+        throw error;
+      }
+
       const note = encodeDecisionNote(
         payload.note ??
           `Local demo decision: ${payload.decision}. No production CRM was updated.`,
         fact.candidateValue
       );
+      const factUpdate = applyDecisionToFact(fact, payload.decision);
+      const promotesCandidate =
+        payload.decision === DecisionType.CONFIRM ||
+        payload.decision === DecisionType.APPROVE;
+      const resultingOfficialSourceRecordId = promotesCandidate
+        ? fact.candidateSourceRecordId ?? fact.officialSourceRecordId
+        : fact.officialSourceRecordId;
+      const resultingOfficialObservedAt = promotesCandidate
+        ? fact.candidateObservedAt ?? fact.officialObservedAt
+        : fact.officialObservedAt;
+      const provenanceUpdate = promotesCandidate
+        ? {
+            previousSourceRecordId: fact.officialSourceRecordId,
+            previousObservedAt: fact.officialObservedAt,
+            officialSourceRecordId: resultingOfficialSourceRecordId,
+            officialObservedAt: resultingOfficialObservedAt,
+            sourceRecordId: resultingOfficialSourceRecordId,
+            observedAt: resultingOfficialObservedAt,
+            candidateSourceRecordId: null,
+            candidateObservedAt: null,
+            candidateEvidence: null
+          }
+        : {
+            candidateSourceRecordId: null,
+            candidateObservedAt: null,
+            candidateEvidence: null
+          };
+      const updated = await transaction.clientFact.updateMany({
+        where: {
+          id: factId,
+          clientId,
+          revision: fact.revision,
+          officialValue: fact.officialValue,
+          candidateValue: fact.candidateValue,
+          lifecycleStatus: fact.lifecycleStatus
+        },
+        data: {
+          ...factUpdate,
+          ...provenanceUpdate,
+          revision: { increment: 1 }
+        }
+      });
+
+      if (updated.count !== 1) {
+        throw new DecisionConflictError();
+      }
 
       await transaction.adviserDecision.create({
         data: {
@@ -413,23 +760,72 @@ export const createReviewService = (
           clientId,
           factId,
           decisionType: payload.decision,
-          note
+          note,
+          actor: demoDecisionActor,
+          candidateValue: fact.candidateValue,
+          candidateSourceRecordId: fact.candidateSourceRecordId,
+          candidateObservedAt: fact.candidateObservedAt,
+          candidateEvidence: fact.candidateEvidence,
+          officialValueBefore: fact.officialValue,
+          officialSourceRecordIdBefore: fact.officialSourceRecordId,
+          officialObservedAtBefore: fact.officialObservedAt,
+          resultingOfficialValue: factUpdate.officialValue,
+          resultingOfficialSourceRecordId,
+          resultingOfficialObservedAt
         }
       });
 
-      const factUpdate = applyDecisionToFact(fact, payload.decision);
-      await transaction.clientFact.update({
-        where: { id: factId },
-        data: factUpdate
+      await hooks.beforeDecisionAuditWrite?.();
+
+      const run = await transaction.workflowRun.create({
+        data: {
+          id: `workflow-${clientId}-apply-adviser-decision-v1-${Date.now()}`,
+          clientId,
+          status: WorkflowRunStatus.PREPARED,
+          completedAt: new Date()
+        }
+      });
+      const decisionSteps = [
+        "Skill selected: apply-adviser-decision",
+        "Skill input validated",
+        "Adviser decision persisted through controlled tool",
+        "Fact state reconciled after adviser decision",
+        "Skill output validated",
+        "Skill completed: apply-adviser-decision"
+      ];
+      await transaction.workflowStep.createMany({
+        data: decisionSteps.map((label, index) => ({
+          id: `${run.id}-step-${index + 1}`,
+          workflowRunId: run.id,
+          sequence: index + 1,
+          label,
+          status: "COMPLETE"
+        }))
       });
     });
 
-    return buildReviewResponse(clientId);
+    try {
+      await hooks.beforeDecisionResponseRead?.();
+      return {
+        committed: true,
+        refreshRequired: false,
+        review: await buildReviewResponse(clientId),
+        message: null
+      };
+    } catch {
+      return {
+        committed: true,
+        refreshRequired: true,
+        review: null,
+        message: decisionSavedRefreshMessage
+      };
+    }
   };
 
   const persistUploadedSourceRecord = async (input: {
     documentType: "TEXT" | "PDF";
     clientId: string;
+    expectedMutationEpoch: number;
     observedDate: string;
     sourceType: "ADVISER_MEETING_NOTE";
     safeFilename: string;
@@ -445,15 +841,6 @@ export const createReviewService = (
     };
     warnings?: string[];
   }): Promise<DocumentUploadResult> => {
-    const clientRecord = await client.client.findUnique({
-      where: { id: input.clientId },
-      select: { id: true }
-    });
-
-    if (!clientRecord) {
-      throw new Error("CLIENT_NOT_FOUND");
-    }
-
     const uploadedAt = new Date();
     const sourceRecordId = `source-upload-${input.clientId}-${uploadedAt.getTime()}`;
     const upload = uploadSourceMetadataSchema.parse({
@@ -470,23 +857,30 @@ export const createReviewService = (
     });
     const lines = input.text.split("\n");
 
-    await client.sourceRecord.create({
-      data: {
-        id: sourceRecordId,
-        clientId: input.clientId,
-        type: SourceRecordType.ADVISER_MEETING_NOTE,
-        title: `Uploaded: ${input.safeFilename}`,
-        observedAt: toUtcDate(input.observedDate),
-        summary:
-          input.documentType === "PDF"
-            ? `Uploaded text-based PDF (${input.pageCount ?? 0} pages, ${input.characterCount} extracted characters).`
-            : `Uploaded text document (${input.characterCount} characters).`,
-        content: {
-          lines,
-          upload
-        },
-        lifecycleStatus: LifecycleStatus.CURRENT
-      }
+    await client.$transaction(async (transaction) => {
+      await lockClientMutationEpoch(
+        transaction,
+        input.clientId,
+        input.expectedMutationEpoch
+      );
+      await transaction.sourceRecord.create({
+        data: {
+          id: sourceRecordId,
+          clientId: input.clientId,
+          type: SourceRecordType.ADVISER_MEETING_NOTE,
+          title: `Uploaded: ${input.safeFilename}`,
+          observedAt: toUtcDate(input.observedDate),
+          summary:
+            input.documentType === "PDF"
+              ? `Uploaded text-based PDF (${input.pageCount ?? 0} pages, ${input.characterCount} extracted characters).`
+              : `Uploaded text document (${input.characterCount} characters).`,
+          content: {
+            lines,
+            upload
+          },
+          lifecycleStatus: LifecycleStatus.CURRENT
+        }
+      });
     });
 
     return {
@@ -511,7 +905,7 @@ export const createReviewService = (
   const createUploadedSourceRecord = async (
     input: Parameters<typeof persistUploadedSourceRecord>[0]
   ) =>
-    clientOperations.commitUpload(input.clientId, () =>
+    clientOperations.commitIfCurrentGeneration(input.clientId, () =>
       persistUploadedSourceRecord(input)
     );
 
@@ -519,99 +913,36 @@ export const createReviewService = (
     clientId: string,
     candidates: readonly ExtractedCandidateProjection[]
   ) => {
-    const supportedCandidates = candidates.filter(
-      (candidate) =>
-        candidate.field === "ADDRESS" || candidate.field === "RISK_PROFILE"
-    );
-    const candidatesByField = new Map(
-      supportedCandidates.map((candidate) => [candidate.field, candidate])
-    );
+    const expectedMutationEpoch = await captureClientMutationEpoch(clientId);
 
     await client.$transaction(async (transaction) => {
-      const sourceRecord = await transaction.sourceRecord.findFirst({
-        where: {
-          clientId,
-          type: SourceRecordType.ADVISER_MEETING_NOTE
-        },
-        orderBy: { observedAt: "desc" }
-      });
-      const facts = await transaction.clientFact.findMany({
-        where: {
-          clientId,
-          id: {
-            in: Object.values(fieldProjectionTargets).map(
-              (target) => target.factId
-            )
-          }
-        },
-        include: {
-          adviserDecisions: {
-            orderBy: { createdAt: "desc" },
-            take: 1
-          }
-        }
-      });
-
-      for (const fact of facts) {
-        const field =
-          fact.id === fieldProjectionTargets.ADDRESS.factId
-            ? "ADDRESS"
-            : "RISK_PROFILE";
-        const target = fieldProjectionTargets[field];
-        const candidate = candidatesByField.get(field);
-        const latestDecision = fact.adviserDecisions[0] ?? null;
-        const candidateObservedAt = candidate
-          ? toUtcDate(candidate.observedDate)
-          : null;
-        const decisionIsNewerThanEvidence =
-          latestDecision && candidateObservedAt
-            ? latestDecision.createdAt >= candidateObservedAt
-            : false;
-
-        if (decisionIsNewerThanEvidence) {
-          continue;
-        }
-
-        if (candidate) {
-          await transaction.clientFact.update({
-            where: { id: fact.id },
-            data: {
-              candidateValue: candidate.proposedValue,
-              lifecycleStatus: target.status,
-              confidence: target.confidence,
-              sourceRecordId: candidate.sourceRecordId,
-              observedAt: candidateObservedAt ?? fact.observedAt,
-              explanation: target.explanation(candidate.proposedValue)
-            }
-          });
-          continue;
-        }
-
-        await transaction.clientFact.update({
-          where: { id: fact.id },
-          data: {
-            candidateValue: null,
-            lifecycleStatus: LifecycleStatus.CURRENT,
-            confidence: "Low",
-            sourceRecordId: sourceRecord?.id ?? fact.sourceRecordId,
-            observedAt: sourceRecord?.observedAt ?? fact.observedAt,
-            explanation: clearCandidateExplanation(fact.field)
-          }
-        });
-      }
+      await lockClientMutationEpoch(
+        transaction,
+        clientId,
+        expectedMutationEpoch
+      );
+      await applyCandidateProjectionInTransaction(
+        transaction,
+        clientId,
+        candidates
+      );
     });
   };
 
   const resetDemo = async () => {
-    await seedDemoData(client);
+    await client.$transaction(async (transaction) => {
+      await seedDemoData(transaction);
+      await hooks.beforeResetCommit?.();
+    });
     return buildReviewResponse(DEMO_CLIENT_ID);
   };
 
   return {
+    mutationCoordinator: clientOperations,
     buildReviewResponse,
     prepareReview,
-    createWorkflowRun,
-    recordWorkflowStep,
+    captureClientMutationEpoch,
+    commitPreparedReview,
     applyExtractedCandidateProjection,
     createUploadedSourceRecord,
     recordDecision,

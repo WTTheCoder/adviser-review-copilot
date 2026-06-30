@@ -1,5 +1,6 @@
 import {
   adviserDecisionPayloadSchema,
+  decisionMutationResultSchema,
   documentUploadResultSchema,
   documentUploadErrorResponseSchema,
   documentUploadRequestSchema,
@@ -8,13 +9,13 @@ import {
   type ReviewResponse,
   reviewResponseSchema
 } from "@client-review-prep/shared";
-import type { z } from "zod";
+import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { ExecutionResult } from "../agent/harness/executionResult.js";
 import { DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
 import {
-  UploadAlreadyInProgressError,
-  UploadInvalidatedByResetError
+  ClientMutationBusyError,
+  ClientMutationInvalidatedError
 } from "../services/clientOperationCoordinator.js";
 import type { ClientOperationCoordinator } from "../services/clientOperationCoordinator.js";
 import type { createReviewService } from "../services/reviewService.js";
@@ -36,7 +37,7 @@ export const uploadRequestBodyLimit = maxDocumentUploadRequestBytes;
 
 export type ReviewRouteService = Pick<
   ReturnType<typeof createReviewService>,
-  "buildReviewResponse" | "resetDemo"
+  "mutationCoordinator" | "buildReviewResponse" | "resetDemo"
 >;
 
 type ReviewRouteSkillName =
@@ -71,6 +72,11 @@ const withExecutionMetadata = (
     }
   });
 
+const applyDecisionRouteResponseSchema = z.union([
+  reviewResponseSchema,
+  decisionMutationResultSchema
+]);
+
 export const registerReviewRoutes = async (
   server: FastifyInstance,
   { reviewService, harness, clientOperations }: ReviewRouteDependencies
@@ -103,7 +109,14 @@ export const registerReviewRoutes = async (
 
     if (!result.ok) {
       request.log.warn({ code: result.error.code }, "Review preparation failed");
-      return reply.status(400).send({ message: result.error.message });
+      return reply
+        .status(
+          result.error.code === "CLIENT_MUTATION_INVALIDATED" ? 409 : 400
+        )
+        .send({
+          code: result.error.code,
+          message: result.error.message
+        });
     }
 
     return withExecutionMetadata(result);
@@ -122,23 +135,54 @@ export const registerReviewRoutes = async (
         return reply.status(400).send({ message: "Invalid adviser decision." });
       }
 
-      const result = await harness.execute(
-        "apply-adviser-decision",
-        {
-          clientId,
-          factId,
-          payload: payloadResult.data
-        },
-        reviewResponseSchema,
-        clientId
+      const result = await clientOperations.runClientMutation(
+        clientId,
+        () =>
+          harness.execute(
+            "apply-adviser-decision",
+            {
+              clientId,
+              factId,
+              payload: payloadResult.data
+            },
+            applyDecisionRouteResponseSchema,
+            clientId
+          )
       );
 
       if (!result.ok) {
         request.log.warn({ code: result.error.code }, "Could not save decision");
-        return reply.status(400).send({ message: result.error.message });
+        return reply
+          .status(result.error.code === "DECISION_CONFLICT" ? 409 : 400)
+          .send({
+            code: result.error.code,
+            message: result.error.message
+          });
       }
 
-      return withExecutionMetadata(result);
+      if ("refreshRequired" in result.output && result.output.refreshRequired) {
+        return {
+          ...result.output,
+          executionMetadata: {
+            skillName: result.metadata.skillName,
+            skillVersion: result.metadata.skillVersion,
+            status: result.metadata.status
+          }
+        };
+      }
+
+      const review = "refreshRequired" in result.output
+        ? result.output.review
+        : result.output;
+
+      return reviewResponseSchema.parse({
+        ...review,
+        executionMetadata: {
+          skillName: result.metadata.skillName,
+          skillVersion: result.metadata.skillVersion,
+          status: result.metadata.status
+        }
+      });
     }
   );
 
@@ -161,21 +205,24 @@ export const registerReviewRoutes = async (
 
       let result: Awaited<ReturnType<ReviewRouteHarness["execute"]>>;
       try {
-        result = await clientOperations.runUpload(clientId, () =>
-          harness.execute(
-            "ingest-client-document",
-            payloadResult.data,
-            documentUploadResultSchema,
-            clientId
-          )
+        result = await clientOperations.runClientMutation(
+          clientId,
+          () =>
+            harness.execute(
+              "ingest-client-document",
+              payloadResult.data,
+              documentUploadResultSchema,
+              clientId
+            ),
+          { rejectIfBusy: true }
         );
       } catch (error) {
-        if (error instanceof UploadAlreadyInProgressError) {
+        if (error instanceof ClientMutationBusyError) {
           return reply.status(409).send({
             message: "An upload is already in progress for this client."
           });
         }
-        if (error instanceof UploadInvalidatedByResetError) {
+        if (error instanceof ClientMutationInvalidatedError) {
           return reply.status(409).send({
             message: "The upload was cancelled because the demo was reset."
           });
@@ -185,6 +232,12 @@ export const registerReviewRoutes = async (
 
       if (!result.ok) {
         request.log.warn({ code: result.error.code }, "Document ingestion failed");
+        if (result.error.code === "CLIENT_MUTATION_INVALIDATED") {
+          return reply.status(409).send({
+            code: result.error.code,
+            message: result.error.message
+          });
+        }
         if (pdfUploadErrorCodes.has(result.error.code)) {
           return reply.status(400).send({
             ...documentUploadErrorResponseSchema.parse({

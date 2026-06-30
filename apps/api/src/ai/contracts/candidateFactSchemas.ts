@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { calendarDateSchema } from "./calendarDateSchema.js";
+import type { calendarDateSchema } from "./calendarDateSchema.js";
 
 export const supportedCandidateFieldSchema = z.enum([
   "ADDRESS",
@@ -24,8 +24,6 @@ export const candidateFactSchema = z
     evidence: z.string().trim().min(1).max(240).describe(
       "Short quote or paraphrase from the source text supporting the candidate, preserving uncertainty."
     ),
-    sourceRecordId: z.string().trim().min(1).max(80),
-    observedDate: calendarDateSchema,
     requiresHumanReview: z.boolean().describe(
       "True when the candidate is uncertain, unverified, high impact, or otherwise needs adviser review."
     ),
@@ -66,6 +64,10 @@ export type SupportedCandidateField = z.infer<
   typeof supportedCandidateFieldSchema
 >;
 export type CandidateFact = z.infer<typeof candidateFactSchema>;
+export type TrustedCandidateFact = CandidateFact & {
+  sourceRecordId: string;
+  observedDate: z.infer<typeof calendarDateSchema>;
+};
 export type CandidateFactExtractionResult = z.infer<
   typeof candidateFactExtractionResultSchema
 >;

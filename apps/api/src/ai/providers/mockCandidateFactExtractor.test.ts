@@ -20,6 +20,14 @@ const input = {
   ] as const
 };
 
+const addressCandidatesFor = async (meetingNoteText: string) =>
+  (
+    await new MockCandidateFactExtractor().extract({
+      ...input,
+      meetingNoteText
+    })
+  ).candidateFacts.filter((fact) => fact.field === "ADDRESS");
+
 describe("MockCandidateFactExtractor", () => {
   it("returns deterministic candidate facts that pass the live schema", async () => {
     const result = await new MockCandidateFactExtractor().extract(input);
@@ -59,14 +67,42 @@ describe("MockCandidateFactExtractor", () => {
         expect.objectContaining({
           field: "RISK_PROFILE",
           proposedValue: "High Growth",
-          sourceRecordId: "source-meeting-note",
-          observedDate: "2026-06-04",
           requiresHumanReview: true,
           evidence:
             "Alex is considering changing to a High Growth risk profile for the next review period."
         })
       ])
     );
+  });
+
+  it.each([
+    ["Alex moved to Joondalup.", "Joondalup"],
+    ["Alex may have moved to Joondalup.", "Joondalup"],
+    ["Alex's new address is in Joondalup.", "Joondalup"],
+    ["The client is now living in Fremantle.", "Fremantle"],
+    ["ALEX MOVED TO SUBIACO!", "Subiaco"]
+  ])("recognizes supported address wording: %s", async (meetingNoteText, expected) => {
+    await expect(addressCandidatesFor(meetingNoteText)).resolves.toEqual([
+      expect.objectContaining({
+        field: "ADDRESS",
+        proposedValue: expected,
+        evidence: meetingNoteText
+      })
+    ]);
+  });
+
+  it.each([
+    "Alex did not move to Joondalup.",
+    "Alex has not moved from East Perth.",
+    "The client is not living in Subiaco.",
+    "The client remains in East Perth.",
+    "The client stayed in East Perth.",
+    "There has been no address change.",
+    "Joondalup was discussed, but the client remains in East Perth.",
+    "Alex may have moved to Joondalup. Alex has not moved from East Perth.",
+    "Alex moved to Joondalup. Alex moved to Fremantle."
+  ])("omits negated or contradictory address wording: %s", async (meetingNoteText) => {
+    await expect(addressCandidatesFor(meetingNoteText)).resolves.toEqual([]);
   });
 
   it.each([

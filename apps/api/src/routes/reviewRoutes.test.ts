@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  DecisionMutationResult,
   DocumentUploadResult,
   ExecutionTraceMetadata,
   ReviewResponse
@@ -57,9 +58,17 @@ const uploadResponse: DocumentUploadResult = {
   ingestionStatus: "validated"
 };
 
+const decisionResponse: DecisionMutationResult = {
+  committed: true,
+  refreshRequired: false,
+  review,
+  message: null
+};
+
 const createTestServer = async () => {
   const server = Fastify({ logger: false });
   const service = {
+    mutationCoordinator: new ClientOperationCoordinator(),
     buildReviewResponse: vi.fn(async () => review),
     resetDemo: vi.fn(async () => review)
   } satisfies ReviewRouteService;
@@ -117,7 +126,11 @@ const createTestServer = async () => {
       async (skillName) => ({
         ok: true,
         output:
-          skillName === "ingest-client-document" ? uploadResponse : review,
+          skillName === "ingest-client-document"
+            ? uploadResponse
+            : skillName === "apply-adviser-decision"
+              ? decisionResponse
+              : review,
         metadata:
           skillName === "ingest-client-document"
             ? uploadExecutionMetadata
@@ -130,10 +143,12 @@ const createTestServer = async () => {
       })
     )
   } satisfies ReviewRouteHarness;
+  const clientOperations = new ClientOperationCoordinator();
+  service.mutationCoordinator = clientOperations;
   const dependencies = {
     reviewService: service,
     harness,
-    clientOperations: new ClientOperationCoordinator()
+    clientOperations
   } satisfies ReviewRouteDependencies;
   await registerReviewRoutes(server, dependencies);
   return { server, service, harness, uploadExecutionMetadata };
@@ -197,6 +212,112 @@ describe("review routes", () => {
       expect.anything(),
       "demo-alex-taylor"
     );
+    await server.close();
+  });
+
+  it("returns a committed refresh-required response when decision readback fails", async () => {
+    const { server, harness } = await createTestServer();
+    harness.execute.mockResolvedValueOnce({
+      ok: true,
+      output: {
+        committed: true,
+        refreshRequired: true,
+        review: null,
+        message: "Decision was saved. Refresh to load the latest review."
+      },
+      metadata: {
+        skillName: "apply-adviser-decision",
+        skillVersion: "1",
+        status: "SUCCEEDED",
+        events: []
+      }
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/facts/fact-address/decision",
+      payload: { decision: "CONFIRM" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      committed: true,
+      refreshRequired: true,
+      review: null,
+      message: "Decision was saved. Refresh to load the latest review.",
+      executionMetadata: {
+        skillName: "apply-adviser-decision",
+        skillVersion: "1",
+        status: "SUCCEEDED"
+      }
+    });
+    await server.close();
+  });
+
+  it("maps a concurrent adviser decision conflict to HTTP 409", async () => {
+    const { server, harness } = await createTestServer();
+    harness.execute.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "DECISION_CONFLICT",
+        message:
+          "The client state changed before this adviser decision could be saved."
+      },
+      metadata: {
+        skillName: "apply-adviser-decision",
+        skillVersion: "1",
+        status: "FAILED",
+        events: []
+      }
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/facts/fact-risk-profile/decision",
+      payload: { decision: "APPROVE" }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: "DECISION_CONFLICT",
+      message:
+        "The client state changed before this adviser decision could be saved."
+    });
+    expect(response.body).not.toContain("Prisma");
+    expect(response.body).not.toContain("stack");
+    await server.close();
+  });
+
+  it("maps a stale preparation epoch to a safe HTTP 409", async () => {
+    const { server, harness } = await createTestServer();
+    harness.execute.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "CLIENT_MUTATION_INVALIDATED",
+        message:
+          "The client operation was cancelled because the demo state changed."
+      },
+      metadata: {
+        skillName: "prepare-annual-review",
+        skillVersion: "1",
+        status: "FAILED",
+        events: []
+      }
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/clients/demo-alex-taylor/prepare-review"
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      code: "CLIENT_MUTATION_INVALIDATED",
+      message:
+        "The client operation was cancelled because the demo state changed."
+    });
+    expect(response.body).not.toContain("Prisma");
+    expect(response.body).not.toContain("stack");
     await server.close();
   });
 
@@ -532,7 +653,7 @@ describe("review routes", () => {
     await server.close();
   });
 
-  it("invalidates a paused upload, preserves reset state, and rejects rapid duplicates", async () => {
+  it("waits for a paused upload before reset and rejects rapid duplicates", async () => {
     const server = Fastify({ logger: false });
     const clientOperations = new ClientOperationCoordinator();
     const canonicalRecords = ["source-legacy", "source-annual", "source-note"];
@@ -548,6 +669,7 @@ describe("review routes", () => {
     });
 
     const service = {
+      mutationCoordinator: clientOperations,
       buildReviewResponse: vi.fn(async () => review),
       resetDemo: vi.fn(async () => {
         records.splice(0, records.length, ...canonicalRecords);
@@ -556,7 +678,7 @@ describe("review routes", () => {
     } satisfies ReviewRouteService;
     const harness = {
       execute: vi.fn<ReviewRouteHarness["execute"]>(
-        async (_skillName, input, _outputSchema, clientId) => {
+        async (_skillName, input) => {
           const request = input as {
             originalFilename: string;
           };
@@ -565,27 +687,25 @@ describe("review routes", () => {
             await releasePromise;
           }
 
-          return clientOperations.commitUpload(clientId, async () => {
-            records.push(`source-upload-${request.originalFilename}`);
-            return {
-              ok: true,
-              output: {
-                ...uploadResponse,
-                sourceRecord: {
-                  ...uploadResponse.sourceRecord,
-                  id: `source-upload-${request.originalFilename}`,
-                  title: `Uploaded: ${request.originalFilename}`
-                },
-                safeFilename: request.originalFilename
+          records.push(`source-upload-${request.originalFilename}`);
+          return {
+            ok: true,
+            output: {
+              ...uploadResponse,
+              sourceRecord: {
+                ...uploadResponse.sourceRecord,
+                id: `source-upload-${request.originalFilename}`,
+                title: `Uploaded: ${request.originalFilename}`
               },
-              metadata: {
-                skillName: "ingest-client-document",
-                skillVersion: "2",
-                status: "SUCCEEDED",
-                events: []
-              }
-            };
-          });
+              safeFilename: request.originalFilename
+            },
+            metadata: {
+              skillName: "ingest-client-document",
+              skillVersion: "2",
+              status: "SUCCEEDED",
+              events: []
+            }
+          };
         }
       )
     } satisfies ReviewRouteHarness;
@@ -618,16 +738,22 @@ describe("review routes", () => {
     });
     expect(duplicate.statusCode).toBe(409);
 
-    const reset = await server.inject({
+    let resetCompleted = false;
+    const reset = server.inject({
       method: "POST",
       url: "/api/demo/reset"
+    }).then((response) => {
+      resetCompleted = true;
+      return response;
     });
-    expect(reset.statusCode).toBe(200);
-    expect(records).toEqual(canonicalRecords);
+    await Promise.resolve();
+    expect(resetCompleted).toBe(false);
 
     releaseUpload();
     const oldUploadResponse = await oldUpload;
-    expect(oldUploadResponse.statusCode).toBe(409);
+    expect(oldUploadResponse.statusCode).toBe(200);
+    const resetResponse = await reset;
+    expect(resetResponse.statusCode).toBe(200);
     expect(records).toEqual(canonicalRecords);
 
     shouldPause = false;

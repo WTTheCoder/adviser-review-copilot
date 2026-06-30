@@ -45,6 +45,7 @@ model Client {
   adviserName      String
   reviewYear       Int
   reviewStatus     String
+  mutationEpoch    Int               @default(0)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   sourceRecords    SourceRecord[]
@@ -64,7 +65,13 @@ model SourceRecord {
   lifecycleStatus LifecycleStatus
   createdAt       DateTime         @default(now())
   client          Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  facts           ClientFact[]
+  facts           ClientFact[]     @relation("LegacyFactSource")
+  officialFacts   ClientFact[]     @relation("OfficialFactSource")
+  previousFacts   ClientFact[]     @relation("PreviousFactSource")
+  candidateFacts  ClientFact[]     @relation("CandidateFactSource")
+  candidateDecisions AdviserDecision[] @relation("DecisionCandidateSource")
+  officialBeforeDecisions AdviserDecision[] @relation("DecisionOfficialBeforeSource")
+  resultingOfficialDecisions AdviserDecision[] @relation("DecisionResultingOfficialSource")
 
   @@index([clientId])
 }
@@ -78,17 +85,31 @@ model ClientFact {
   previousValue    String?
   sourceRecordId   String
   observedAt       DateTime
+  officialSourceRecordId String
+  officialObservedAt     DateTime
+  previousSourceRecordId String?
+  previousObservedAt     DateTime?
+  candidateSourceRecordId String?
+  candidateObservedAt     DateTime?
+  candidateEvidence       String?
   confidence       String
   lifecycleStatus  LifecycleStatus
   explanation      String
+  revision         Int               @default(0)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   client           Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  sourceRecord     SourceRecord      @relation(fields: [sourceRecordId], references: [id])
+  sourceRecord     SourceRecord      @relation("LegacyFactSource", fields: [sourceRecordId], references: [id])
+  officialSourceRecord SourceRecord  @relation("OfficialFactSource", fields: [officialSourceRecordId], references: [id])
+  previousSourceRecord SourceRecord? @relation("PreviousFactSource", fields: [previousSourceRecordId], references: [id])
+  candidateSourceRecord SourceRecord? @relation("CandidateFactSource", fields: [candidateSourceRecordId], references: [id])
   adviserDecisions AdviserDecision[]
 
   @@index([clientId])
   @@index([sourceRecordId])
+  @@index([officialSourceRecordId])
+  @@index([previousSourceRecordId])
+  @@index([candidateSourceRecordId])
 }
 
 model AdviserDecision {
@@ -97,12 +118,29 @@ model AdviserDecision {
   factId       String
   decisionType DecisionType
   note         String?
+  actor        String?
+  candidateValue String?
+  candidateSourceRecordId String?
+  candidateObservedAt DateTime?
+  candidateEvidence String?
+  officialValueBefore String?
+  officialSourceRecordIdBefore String?
+  officialObservedAtBefore DateTime?
+  resultingOfficialValue String?
+  resultingOfficialSourceRecordId String?
+  resultingOfficialObservedAt DateTime?
   createdAt    DateTime     @default(now())
   client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   fact         ClientFact   @relation(fields: [factId], references: [id], onDelete: Cascade)
+  candidateSourceRecord SourceRecord? @relation("DecisionCandidateSource", fields: [candidateSourceRecordId], references: [id], onDelete: Restrict)
+  officialSourceRecordBefore SourceRecord? @relation("DecisionOfficialBeforeSource", fields: [officialSourceRecordIdBefore], references: [id], onDelete: Restrict)
+  resultingOfficialSourceRecord SourceRecord? @relation("DecisionResultingOfficialSource", fields: [resultingOfficialSourceRecordId], references: [id], onDelete: Restrict)
 
   @@index([clientId])
   @@index([factId])
+  @@index([candidateSourceRecordId])
+  @@index([officialSourceRecordIdBefore])
+  @@index([resultingOfficialSourceRecordId])
 }
 
 model WorkflowRun {

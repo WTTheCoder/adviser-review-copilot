@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { reviewResponseSchema } from "@client-review-prep/shared";
 import { candidateFactExtractionResultSchema } from "../../ai/contracts/candidateFactSchemas.js";
-import { classifyCandidateFactsWithDiagnostics } from "../../ai/contracts/candidateFactReviewRules.js";
+import {
+  attachTrustedCandidateProvenance,
+  reconcileCandidateFactsWithDiagnostics
+} from "../../ai/contracts/candidateFactReviewRules.js";
 import type { SkillDefinition } from "./skillTypes.js";
 import { loadClientContextSkill } from "./loadClientContextSkill.js";
 import { reconcileClientFacts } from "./reconcileClientFactsSkill.js";
@@ -10,12 +13,8 @@ export const prepareAnnualReviewInputSchema = z.object({
   clientId: z.string().min(1)
 });
 
-const createWorkflowRunOutputSchema = z.object({
-  workflowRunId: z.string()
-});
-
-const recordWorkflowStepOutputSchema = z.object({
-  id: z.string()
+const mutationEpochOutputSchema = z.object({
+  mutationEpoch: z.number().int().nonnegative()
 });
 
 const supportedFields = [
@@ -26,6 +25,37 @@ const supportedFields = [
   "ANNUAL_INCOME",
   "SUPERANNUATION"
 ] as const;
+
+const supportedFieldForFact = (fact: {
+  id: string;
+  field: string;
+}): (typeof supportedFields)[number] | null => {
+  if (fact.id === "fact-address" || fact.field === "Address") {
+    return "ADDRESS";
+  }
+
+  if (fact.id === "fact-risk-profile" || fact.field === "Risk profile") {
+    return "RISK_PROFILE";
+  }
+
+  if (fact.field === "Financial goal") {
+    return "FINANCIAL_GOAL";
+  }
+
+  if (fact.field === "Employment") {
+    return "EMPLOYMENT";
+  }
+
+  if (fact.field === "Annual income") {
+    return "ANNUAL_INCOME";
+  }
+
+  if (fact.field === "Superannuation") {
+    return "SUPERANNUATION";
+  }
+
+  return null;
+};
 
 const extractionTraceLabel = (extraction: {
   providerMode: "mock" | "openai";
@@ -62,44 +92,39 @@ export const prepareAnnualReviewSkill: SkillDefinition<
     "legacy.getSourceRecords",
     "legacy.getFacts",
     "ai.extractCandidateFacts",
-    "review.createWorkflowRun",
-    "review.recordWorkflowStep",
-    "review.applyExtractedCandidateProjection",
-    "review.getPreparedReview"
+    "review.captureClientMutationEpoch",
+    "review.commitPreparedReview"
   ],
   execute: async ({ clientId }, context) => {
+    const preparedWorkflowSteps: Array<{
+      label: string;
+      status: "COMPLETE" | "ESCALATED" | "FAILED";
+      detail: string | null;
+    }> = [];
     const recordStep = async (input: {
       workflowRunId: string;
       sequence: number;
       label: string;
       status?: "COMPLETE" | "ESCALATED" | "FAILED";
       detail?: string | null;
-    }) =>
-      context.toolRegistry.execute(
-        "review.recordWorkflowStep",
-        {
-          workflowRunId: input.workflowRunId,
-          sequence: input.sequence,
-          label: input.label,
-          status: input.status ?? "COMPLETE",
-          detail: input.detail ?? null
-        },
-        prepareAnnualReviewSkill.allowedTools,
-        context,
-        recordWorkflowStepOutputSchema
-      );
+    }) => {
+      preparedWorkflowSteps.push({
+        label: input.label,
+        status: input.status ?? "COMPLETE",
+        detail: input.detail ?? null
+      });
+    };
 
-    const run = await context.toolRegistry.execute(
-      "review.createWorkflowRun",
+    const epoch = await context.toolRegistry.execute(
+      "review.captureClientMutationEpoch",
       {
-        clientId,
-        skillName: prepareAnnualReviewSkill.name,
-        skillVersion: prepareAnnualReviewSkill.version ?? null
+        clientId
       },
       prepareAnnualReviewSkill.allowedTools,
       context,
-      createWorkflowRunOutputSchema
+      mutationEpochOutputSchema
     );
+    const run = { workflowRunId: "pending-atomic-commit" };
 
     let sequence = 1;
     await recordStep(
@@ -195,8 +220,27 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         label: "Validated structured extraction output"
       }
     );
-    const classification = classifyCandidateFactsWithDiagnostics(
-      extraction.candidateFacts
+    const trustedCandidates = meetingNote
+      ? attachTrustedCandidateProvenance(extraction.candidateFacts, {
+          sourceRecordId: meetingNote.id,
+          observedDate: meetingNote.observedAt.slice(0, 10)
+        })
+      : [];
+    const classification = reconcileCandidateFactsWithDiagnostics(
+      trustedCandidates,
+      loadedContext.existingFacts.flatMap((fact) => {
+        const field = supportedFieldForFact(fact);
+
+        return field
+          ? [
+              {
+                field,
+                officialValue: fact.officialValue,
+                officialObservedAt: fact.officialObservedAt
+              }
+            ]
+          : [];
+      })
     );
     const classifiedCandidates = classification.classifications;
     if (classification.warnings.length > 0) {
@@ -204,28 +248,12 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         {
           workflowRunId: run.workflowRunId,
           sequence: sequence++,
-          label: "Unsupported extracted candidates omitted",
+          label: "Extracted candidates reconciled with official facts",
           status: "ESCALATED",
           detail: classification.warnings.join(" ")
         }
       );
     }
-    await context.toolRegistry.execute(
-      "review.applyExtractedCandidateProjection",
-      {
-        clientId,
-        candidates: classifiedCandidates.map((candidate) => ({
-          field: candidate.field,
-          proposedValue: candidate.proposedValue,
-          applicationStatus: candidate.applicationStatus,
-          sourceRecordId: candidate.sourceRecordId,
-          observedDate: candidate.observedDate
-        }))
-      },
-      prepareAnnualReviewSkill.allowedTools,
-      context,
-      z.object({ applied: z.boolean() })
-    );
     context.recordEvent({
       label: "Application rules classified extracted candidates",
       detail: `${classifiedCandidates.length} candidates require deterministic review handling.`
@@ -273,8 +301,22 @@ export const prepareAnnualReviewSkill: SkillDefinition<
     );
 
     const review = await context.toolRegistry.execute(
-      "review.getPreparedReview",
-      { clientId },
+      "review.commitPreparedReview",
+      {
+        clientId,
+        expectedMutationEpoch: epoch.mutationEpoch,
+        skillName: prepareAnnualReviewSkill.name,
+        skillVersion: prepareAnnualReviewSkill.version ?? null,
+        candidates: classifiedCandidates.map((candidate) => ({
+          field: candidate.field,
+          proposedValue: candidate.proposedValue,
+          evidence: candidate.evidence,
+          applicationStatus: candidate.applicationStatus,
+          sourceRecordId: candidate.sourceRecordId,
+          observedDate: candidate.observedDate
+        })),
+        workflowSteps: preparedWorkflowSteps
+      },
       prepareAnnualReviewSkill.allowedTools,
       context,
       reviewResponseSchema
@@ -286,7 +328,7 @@ export const prepareAnnualReviewSkill: SkillDefinition<
         providerMode: extraction.providerMode,
         model: extraction.model,
         candidateCount: extraction.candidateFacts.length,
-        warnings: extraction.warnings
+        warnings: [...extraction.warnings, ...classification.warnings]
       }
     };
   }

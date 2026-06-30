@@ -21,12 +21,15 @@ import {
   clearUploadTrace,
   replaceUploadTrace
 } from "./domain/uploadTraceState.js";
+import { parseDecisionResponse } from "./domain/decisionResponse.js";
 import {
   getPrepareButtonLabel,
+  getPrimaryExtractionWarning,
   getReviewStatusLabel,
   type ReviewPhase
 } from "./domain/reviewWorkflow.js";
 import { createDecisionSubmissionLock } from "./domain/decisionSubmissionLock.js";
+import { createClientOperationGeneration } from "./domain/clientOperationGeneration.js";
 import type { ClientFact, UploadExecutionMetadata } from "./types/demo.js";
 
 const DEMO_CLIENT_ID = "demo-alex-taylor";
@@ -37,12 +40,14 @@ export const App = () => {
   const [reviewPhase, setReviewPhase] = useState<ReviewPhase>("ready");
   const [selectedFact, setSelectedFact] = useState<ClientFact | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
   const [savingFactId, setSavingFactId] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [latestUploadTrace, setLatestUploadTrace] =
     useState<UploadExecutionMetadata | null>(null);
   const [uploadPanelResetToken, setUploadPanelResetToken] = useState(0);
   const decisionSubmissionLock = useRef(createDecisionSubmissionLock());
+  const clientOperationGeneration = useRef(createClientOperationGeneration());
   const apiBaseUrl = useMemo(
     () => import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001",
     []
@@ -88,6 +93,7 @@ export const App = () => {
 
     const loadReview = async () => {
       setLoadError(null);
+      setNoticeMessage(null);
 
       try {
         const response = await fetch(
@@ -111,6 +117,7 @@ export const App = () => {
           setLoadError(
             "Review data is unavailable. Check that the API and local PostgreSQL database are running."
           );
+          setNoticeMessage(null);
         }
       }
     };
@@ -122,9 +129,51 @@ export const App = () => {
     };
   }, [apiBaseUrl]);
 
+  const refreshReview = async (
+    operationGeneration: number,
+    successMessage: string | null = null
+  ) => {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/review`
+      );
+
+      if (!response.ok) {
+        throw new Error("Review data is unavailable.");
+      }
+
+      const review = reviewResponseSchema.parse(await response.json());
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          setReviewData(review);
+          setReviewPhase(
+            review.client.reviewStatus === "Ready for adviser review"
+              ? "prepared"
+              : "ready"
+          );
+          setLoadError(null);
+          setNoticeMessage(successMessage);
+        }
+      );
+    } catch {
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          setLoadError(
+            "Review data is unavailable. Check that the API and local PostgreSQL database are running."
+          );
+          setNoticeMessage(null);
+        }
+      );
+    }
+  };
+
   const handlePrepareReview = async () => {
+    const operationGeneration = clientOperationGeneration.current.capture();
     setReviewPhase("preparing");
     setLoadError(null);
+    setNoticeMessage(null);
 
     try {
       const response = await fetch(
@@ -137,12 +186,24 @@ export const App = () => {
       }
 
       const preparedReview = reviewResponseSchema.parse(await response.json());
-      setReviewData(preparedReview);
-      setReviewPhase("prepared");
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          setReviewData(preparedReview);
+          setReviewPhase("prepared");
+          setNoticeMessage(null);
+        }
+      );
     } catch {
-      setReviewPhase(reviewData ? "prepared" : "ready");
-      setLoadError(
-        "Review preparation failed. Check that the API and database are available."
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          setReviewPhase(reviewData ? "prepared" : "ready");
+          setLoadError(
+            "Review preparation failed. Check that the API and database are available."
+          );
+          setNoticeMessage(null);
+        }
       );
     }
   };
@@ -152,8 +213,10 @@ export const App = () => {
       return;
     }
 
+    const operationGeneration = clientOperationGeneration.current.capture();
     setSavingFactId(factId);
     setLoadError(null);
+    setNoticeMessage(null);
 
     try {
       const payload = adviserDecisionPayloadSchema.parse({
@@ -169,26 +232,58 @@ export const App = () => {
         }
       );
 
+      if (response.status === 409) {
+        await refreshReview(
+          operationGeneration,
+          "The client state changed before this decision could be saved. The current review has been refreshed."
+        );
+        return;
+      }
+
       if (!response.ok) {
         throw new Error("Could not save decision.");
       }
 
-      const updatedReview = reviewResponseSchema.parse(await response.json());
-      setReviewData(updatedReview);
-      setReviewPhase("prepared");
+      const parsedDecision = parseDecisionResponse(await response.json());
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          if (parsedDecision.kind === "refreshRequired") {
+            setNoticeMessage(parsedDecision.message);
+            setReviewPhase("prepared");
+            return;
+          }
+
+          setReviewData(parsedDecision.review);
+          setReviewPhase("prepared");
+          setNoticeMessage(null);
+        }
+      );
     } catch {
-      setLoadError(
-        "The adviser decision could not be saved. No production CRM was updated."
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => {
+          setLoadError(
+            "The adviser decision could not be saved. No production CRM was updated."
+          );
+          setNoticeMessage(null);
+        }
       );
     } finally {
       decisionSubmissionLock.current.finish(factId);
-      setSavingFactId(null);
+      clientOperationGeneration.current.applyIfCurrent(
+        operationGeneration,
+        () => setSavingFactId(null)
+      );
     }
   };
 
   const handleResetDemo = async () => {
+    const resetGeneration = clientOperationGeneration.current.invalidate();
     setIsResetting(true);
+    setSavingFactId(null);
     setLoadError(null);
+    setNoticeMessage(null);
     setUploadPanelResetToken((current) => current + 1);
 
     try {
@@ -201,31 +296,29 @@ export const App = () => {
       }
 
       const resetReview = reviewResponseSchema.parse(await response.json());
-      setReviewData(resetReview);
-      setReviewPhase("ready");
-      setSelectedFact(null);
-      setLatestUploadTrace(clearUploadTrace());
+      clientOperationGeneration.current.applyIfCurrent(resetGeneration, () => {
+        setReviewData(resetReview);
+        setReviewPhase("ready");
+        setSelectedFact(null);
+        setLatestUploadTrace(clearUploadTrace());
+        setNoticeMessage(null);
+      });
     } catch {
-      setLoadError("The local demo reset failed. Check the API and database.");
+      clientOperationGeneration.current.applyIfCurrent(resetGeneration, () => {
+        setReviewPhase(
+          reviewData?.client.reviewStatus === "Ready for adviser review"
+            ? "prepared"
+            : "ready"
+        );
+        setLoadError("The local demo reset failed. Check the API and database.");
+        setNoticeMessage(null);
+      });
     } finally {
-      setIsResetting(false);
+      clientOperationGeneration.current.applyIfCurrent(
+        resetGeneration,
+        () => setIsResetting(false)
+      );
     }
-  };
-
-  const refreshReview = async () => {
-    const response = await fetch(`${apiBaseUrl}/api/clients/${DEMO_CLIENT_ID}/review`);
-
-    if (!response.ok) {
-      throw new Error("Review data is unavailable.");
-    }
-
-    const review = reviewResponseSchema.parse(await response.json());
-    setReviewData(review);
-    setReviewPhase(
-      review.client.reviewStatus === "Ready for adviser review"
-        ? "prepared"
-        : "ready"
-    );
   };
 
   const isLoading = !reviewData && !loadError;
@@ -247,7 +340,9 @@ export const App = () => {
       ? `Extraction: OpenAI - ${reviewData.extractionMetadata.model ?? "configured model"}`
       : "Extraction: Mock"
     : null;
-  const extractionWarning = reviewData?.extractionMetadata?.warnings[0] ?? null;
+  const extractionWarning = getPrimaryExtractionWarning(
+    reviewData?.extractionMetadata?.warnings
+  );
   const currentSelectedFact =
     selectedFact && reviewData
       ? reviewData.clientFacts.find((fact) => fact.id === selectedFact.id) ??
@@ -267,17 +362,17 @@ export const App = () => {
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-wide text-cyan-700">
-                Client Review Prep Agent
+                Adviser Review Copilot
               </p>
               <h1 className="mt-2 text-3xl font-semibold tracking-normal text-slate-950 sm:text-4xl">
-                Source-backed preparation for adviser annual reviews
+                Source-backed preparation for client reviews
               </h1>
               <div className="mt-5 flex flex-wrap gap-3 text-sm text-slate-700">
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">
                   {reviewData?.client.name ?? "Alex Taylor"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  {reviewData ? `${reviewData.client.reviewYear} Annual Review` : "2026 Annual Review"}
+                  {reviewData ? `${reviewData.client.reviewYear} Client Review` : "2026 Client Review"}
                 </span>
                 <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
                   Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
@@ -291,7 +386,7 @@ export const App = () => {
               <ApiStatusBadge status={apiStatus} />
               <button
                 className="rounded bg-cyan-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-700 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={isPreparing || isLoading}
+                disabled={isPreparing || isLoading || isResetting}
                 type="button"
                 onClick={handlePrepareReview}
               >
@@ -311,6 +406,12 @@ export const App = () => {
           {loadError ? (
             <div className="rounded border border-rose-200 bg-rose-50 p-5 text-sm leading-6 text-rose-800">
               {loadError}
+            </div>
+          ) : null}
+
+          {noticeMessage ? (
+            <div className="rounded border border-cyan-200 bg-cyan-50 p-5 text-sm leading-6 text-cyan-900">
+              {noticeMessage}
             </div>
           ) : null}
 
@@ -366,6 +467,7 @@ export const App = () => {
                 <AdviserActions
                   facts={reviewData.clientFacts}
                   savingFactId={savingFactId}
+                  disabled={isResetting}
                   items={reviewData.adviserActions}
                   onDecision={handleDecision}
                 />
@@ -391,8 +493,13 @@ export const App = () => {
             clientId={DEMO_CLIENT_ID}
             resetToken={uploadPanelResetToken}
             onUploaded={(upload) => {
-              setLatestUploadTrace(replaceUploadTrace(upload));
-              void refreshReview();
+              const operationGeneration =
+                clientOperationGeneration.current.capture();
+              clientOperationGeneration.current.applyIfCurrent(
+                operationGeneration,
+                () => setLatestUploadTrace(replaceUploadTrace(upload))
+              );
+              void refreshReview(operationGeneration);
             }}
           />
           <UploadExecutionTrace metadata={latestUploadTrace} />

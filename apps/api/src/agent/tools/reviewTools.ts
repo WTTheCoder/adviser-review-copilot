@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   adviserDecisionPayloadSchema,
+  decisionMutationResultSchema,
   documentUploadResultSchema,
   reviewResponseSchema
 } from "@client-review-prep/shared";
@@ -8,38 +9,37 @@ import { calendarDateSchema } from "../../ai/contracts/calendarDateSchema.js";
 import { ExecutionError } from "../harness/executionErrors.js";
 import type { ToolDefinition } from "./toolTypes.js";
 import type { createReviewService } from "../../services/reviewService.js";
-import { validatedDocumentForPersistenceSchema } from "./documentTools.js";
+import {
+  ClientMutationConflictError,
+  DecisionConflictError,
+  InvalidDecisionForFactError
+} from "../../services/reviewService.js";
+import {
+  extractedPdfUploadSchema,
+  validatedTextUploadSchema
+} from "./documentTools.js";
 
 export type ReviewToolService = Pick<
   ReturnType<typeof createReviewService>,
-  | "createWorkflowRun"
-  | "recordWorkflowStep"
-  | "applyExtractedCandidateProjection"
+  | "captureClientMutationEpoch"
+  | "commitPreparedReview"
   | "createUploadedSourceRecord"
   | "buildReviewResponse"
   | "recordDecision"
 >;
 
-const createWorkflowRunInputSchema = z.object({
-  clientId: z.string().min(1),
-  skillName: z.string().min(1),
-  skillVersion: z.string().nullable()
+const captureClientMutationEpochInputSchema = z.object({
+  clientId: z.string().min(1)
 });
 
-const createWorkflowRunOutputSchema = z.object({
-  workflowRunId: z.string()
+const captureClientMutationEpochOutputSchema = z.object({
+  mutationEpoch: z.number().int().nonnegative()
 });
 
-const recordWorkflowStepInputSchema = z.object({
-  workflowRunId: z.string(),
-  sequence: z.number().int().positive(),
+const preparedWorkflowStepSchema = z.object({
   label: z.string().min(1),
   status: z.enum(["COMPLETE", "ESCALATED", "FAILED"]),
   detail: z.string().nullable().optional()
-});
-
-const recordWorkflowStepOutputSchema = z.object({
-  id: z.string()
 });
 
 const getPreparedReviewInputSchema = z.object({
@@ -56,6 +56,7 @@ const extractedCandidateProjectionSchema = z.object({
     "SUPERANNUATION"
   ]),
   proposedValue: z.string().min(1).max(160),
+  evidence: z.string().min(1).max(240),
   applicationStatus: z.enum([
     "NEEDS_CONFIRMATION",
     "REQUIRES_ADVISER_APPROVAL",
@@ -65,13 +66,13 @@ const extractedCandidateProjectionSchema = z.object({
   observedDate: calendarDateSchema
 });
 
-const applyExtractedCandidateProjectionInputSchema = z.object({
+const commitPreparedReviewInputSchema = z.object({
   clientId: z.string().min(1),
-  candidates: z.array(extractedCandidateProjectionSchema).max(10)
-});
-
-const applyExtractedCandidateProjectionOutputSchema = z.object({
-  applied: z.boolean()
+  expectedMutationEpoch: z.number().int().nonnegative(),
+  skillName: z.string().min(1),
+  skillVersion: z.string().nullable(),
+  candidates: z.array(extractedCandidateProjectionSchema).max(10),
+  workflowSteps: z.array(preparedWorkflowStepSchema).min(1).max(30)
 });
 
 const applyDecisionInputSchema = z.object({
@@ -83,46 +84,53 @@ const applyDecisionInputSchema = z.object({
 export const createReviewTools = (
   reviewService: ReviewToolService
 ) => {
-  const createWorkflowRun: ToolDefinition<
-    typeof createWorkflowRunInputSchema,
-    typeof createWorkflowRunOutputSchema
+  const captureClientMutationEpoch: ToolDefinition<
+    typeof captureClientMutationEpochInputSchema,
+    typeof captureClientMutationEpochOutputSchema
   > = {
-    name: "review.createWorkflowRun",
-    description: "Create a persisted workflow run for a controlled skill execution.",
-    inputSchema: createWorkflowRunInputSchema,
-    outputSchema: createWorkflowRunOutputSchema,
-    risk: "MEDIUM",
-    execute: async ({ clientId, skillName, skillVersion }, context) => {
-      const run = await reviewService.createWorkflowRun(
-        clientId,
-        skillName,
-        skillVersion
-      );
-      context.recordEvent({
-        label: "Workflow run persisted",
-        detail: `Skill ${skillName}${skillVersion ? ` v${skillVersion}` : ""}`
-      });
-      return { workflowRunId: run.id };
-    }
+    name: "review.captureClientMutationEpoch",
+    description:
+      "Capture the durable client mutation epoch before long-running computation.",
+    inputSchema: captureClientMutationEpochInputSchema,
+    outputSchema: captureClientMutationEpochOutputSchema,
+    risk: "LOW",
+    execute: async ({ clientId }) => ({
+      mutationEpoch:
+        await reviewService.captureClientMutationEpoch(clientId)
+    })
   };
 
-  const recordWorkflowStep: ToolDefinition<
-    typeof recordWorkflowStepInputSchema,
-    typeof recordWorkflowStepOutputSchema
+  const commitPreparedReview: ToolDefinition<
+    typeof commitPreparedReviewInputSchema,
+    typeof reviewResponseSchema
   > = {
-    name: "review.recordWorkflowStep",
-    description: "Persist an ordered workflow/audit step for the current run.",
-    inputSchema: recordWorkflowStepInputSchema,
-    outputSchema: recordWorkflowStepOutputSchema,
-    risk: "LOW",
-    execute: async (input) =>
-      reviewService.recordWorkflowStep({
-        workflowRunId: input.workflowRunId,
-        sequence: input.sequence,
-        label: input.label,
-        status: input.status,
-        detail: input.detail ?? null
-      })
+    name: "review.commitPreparedReview",
+    description:
+      "Atomically persist candidate projection and the mandatory preparation workflow trace.",
+    inputSchema: commitPreparedReviewInputSchema,
+    outputSchema: reviewResponseSchema,
+    risk: "MEDIUM",
+    execute: async (input, context) => {
+      try {
+        const review = await reviewService.commitPreparedReview({
+          ...input,
+          workflowSteps: input.workflowSteps.map((step) => ({
+            label: step.label,
+            status: step.status,
+            detail: step.detail ?? null
+          }))
+        });
+        context.recordEvent({
+          label: "Prepared review committed atomically"
+        });
+        return review;
+      } catch (error) {
+        if (error instanceof ClientMutationConflictError) {
+          throw new ExecutionError("CLIENT_MUTATION_INVALIDATED");
+        }
+        throw error;
+      }
+    }
   };
 
   const getPreparedReview: ToolDefinition<
@@ -137,63 +145,64 @@ export const createReviewTools = (
     execute: async ({ clientId }) => reviewService.buildReviewResponse(clientId)
   };
 
-  const applyExtractedCandidateProjection: ToolDefinition<
-    typeof applyExtractedCandidateProjectionInputSchema,
-    typeof applyExtractedCandidateProjectionOutputSchema
-  > = {
-    name: "review.applyExtractedCandidateProjection",
-    description:
-      "Replace the current preparation candidate projection using deterministic application rules.",
-    inputSchema: applyExtractedCandidateProjectionInputSchema,
-    outputSchema: applyExtractedCandidateProjectionOutputSchema,
-    risk: "MEDIUM",
-    execute: async ({ clientId, candidates }) => {
-      await reviewService.applyExtractedCandidateProjection(clientId, candidates);
-      return { applied: true };
-    }
-  };
-
   const applyDecision: ToolDefinition<
     typeof applyDecisionInputSchema,
-    typeof reviewResponseSchema
+    typeof decisionMutationResultSchema
   > = {
     name: "review.applyDecision",
     description: "Persist an adviser decision using deterministic domain rules.",
     inputSchema: applyDecisionInputSchema,
-    outputSchema: reviewResponseSchema,
+    outputSchema: decisionMutationResultSchema,
     risk: "HIGH",
     execute: async ({ clientId, factId, payload }) => {
       try {
         return await reviewService.recordDecision(clientId, factId, payload);
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === "INVALID_DECISION_FOR_FACT"
-        ) {
+        if (error instanceof InvalidDecisionForFactError) {
           throw new ExecutionError("INVALID_ADVISER_DECISION");
+        }
+        if (error instanceof DecisionConflictError) {
+          throw new ExecutionError("DECISION_CONFLICT");
         }
         throw error;
       }
     }
   };
 
+  const uploadPersistenceInputSchema = z.discriminatedUnion("documentType", [
+    validatedTextUploadSchema.extend({
+      expectedMutationEpoch: z.number().int().nonnegative()
+    }),
+    extractedPdfUploadSchema.extend({
+      expectedMutationEpoch: z.number().int().nonnegative()
+    })
+  ]);
+
   const createUploadedSourceRecord: ToolDefinition<
-    typeof validatedDocumentForPersistenceSchema,
+    typeof uploadPersistenceInputSchema,
     typeof documentUploadResultSchema
   > = {
     name: "review.createUploadedSourceRecord",
     description:
       "Persist validated normalized document text and safe upload metadata.",
-    inputSchema: validatedDocumentForPersistenceSchema,
+    inputSchema: uploadPersistenceInputSchema,
     outputSchema: documentUploadResultSchema,
     risk: "MEDIUM",
-    execute: async (input) => reviewService.createUploadedSourceRecord(input)
+    execute: async (input) => {
+      try {
+        return await reviewService.createUploadedSourceRecord(input);
+      } catch (error) {
+        if (error instanceof ClientMutationConflictError) {
+          throw new ExecutionError("CLIENT_MUTATION_INVALIDATED");
+        }
+        throw error;
+      }
+    }
   };
 
   return [
-    createWorkflowRun,
-    recordWorkflowStep,
-    applyExtractedCandidateProjection,
+    captureClientMutationEpoch,
+    commitPreparedReview,
     createUploadedSourceRecord,
     getPreparedReview,
     applyDecision

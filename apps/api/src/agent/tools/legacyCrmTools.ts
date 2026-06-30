@@ -174,10 +174,27 @@ export const createLegacyCrmTools = (legacyAdapter: LegacyCrmToolAdapter) => {
         officialValue: fact.officialValue,
         candidateValue: fact.candidateValue,
         previousValue: fact.previousValue,
-        sourceRecordId: fact.sourceRecordId,
-        sourceDocument: fact.sourceRecord.title,
-        observedAt: fact.observedAt.toISOString(),
-        observedDate: formatDate(fact.observedAt),
+        sourceRecordId: fact.officialSourceRecordId,
+        sourceDocument: fact.officialSourceRecord.title,
+        observedAt: fact.officialObservedAt.toISOString(),
+        observedDate: formatDate(fact.officialObservedAt),
+        officialSourceRecordId: fact.officialSourceRecordId,
+        officialSourceDocument: fact.officialSourceRecord.title,
+        officialObservedAt: fact.officialObservedAt.toISOString(),
+        officialObservedDate: formatDate(fact.officialObservedAt),
+        previousSourceRecordId: fact.previousSourceRecordId,
+        previousSourceDocument: fact.previousSourceRecord?.title ?? null,
+        previousObservedAt: fact.previousObservedAt?.toISOString() ?? null,
+        previousObservedDate: fact.previousObservedAt
+          ? formatDate(fact.previousObservedAt)
+          : null,
+        candidateSourceRecordId: fact.candidateSourceRecordId,
+        candidateSourceDocument: fact.candidateSourceRecord?.title ?? null,
+        candidateObservedAt: fact.candidateObservedAt?.toISOString() ?? null,
+        candidateObservedDate: fact.candidateObservedAt
+          ? formatDate(fact.candidateObservedAt)
+          : null,
+        candidateEvidence: fact.candidateEvidence,
         confidence:
           fact.confidence === "High" || fact.confidence === "Medium"
             ? fact.confidence

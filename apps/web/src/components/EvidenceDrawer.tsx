@@ -18,6 +18,12 @@ export const EvidenceDrawer = ({
   }
 
   const explanation = getEvidenceExplanation(fact, adviserAction);
+  const decisionHistory =
+    adviserAction?.decisionHistory && adviserAction.decisionHistory.length > 0
+      ? adviserAction.decisionHistory
+      : adviserAction?.latestDecision
+        ? [adviserAction.latestDecision]
+        : [];
 
   return (
     <div
@@ -90,7 +96,7 @@ export const EvidenceDrawer = ({
                 Source document
               </dt>
               <dd className="mt-1 text-base font-semibold text-slate-950">
-                {fact.sourceDocument}
+                {fact.officialSourceDocument}
               </dd>
             </div>
             <div>
@@ -98,9 +104,29 @@ export const EvidenceDrawer = ({
                 Observed date
               </dt>
               <dd className="mt-1 text-base font-semibold text-slate-950">
-                {fact.observedDate}
+                {fact.officialObservedDate}
               </dd>
             </div>
+            {fact.candidateValue && fact.candidateSourceDocument ? (
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Candidate source
+                </dt>
+                <dd className="mt-1 text-base font-semibold text-slate-950">
+                  {fact.candidateSourceDocument}
+                </dd>
+              </div>
+            ) : null}
+            {fact.candidateValue && fact.candidateObservedDate ? (
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Candidate observed date
+                </dt>
+                <dd className="mt-1 text-base font-semibold text-slate-950">
+                  {fact.candidateObservedDate}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Confidence
@@ -127,6 +153,94 @@ export const EvidenceDrawer = ({
               {explanation}
             </p>
           </section>
+          {fact.candidateEvidence ? (
+            <section className="rounded border border-slate-200 bg-white p-4">
+              <h3 className="text-base font-semibold text-slate-950">
+                Candidate evidence
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                {fact.candidateEvidence}
+              </p>
+            </section>
+          ) : null}
+          {decisionHistory.length > 0 ? (
+            <section className="rounded border border-slate-200 bg-white p-4">
+              <h3 className="text-base font-semibold text-slate-950">
+                Decision history
+              </h3>
+              <div className="mt-3 space-y-4">
+                {decisionHistory.map((decision) => (
+                  <article
+                    className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0"
+                    key={`${decision.decision}-${decision.createdAt}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="font-semibold text-slate-950">
+                        {decision.decision}
+                      </span>
+                      <span className="text-slate-500">
+                        {new Date(decision.createdAt).toLocaleString("en-AU", {
+                          dateStyle: "medium",
+                          timeStyle: "short"
+                        })}
+                      </span>
+                    </div>
+                    <dl className="mt-2 grid gap-2 text-sm text-slate-700">
+                      {decision.candidateValue ? (
+                        <div>
+                          <dt className="font-semibold text-slate-900">
+                            Candidate
+                          </dt>
+                          <dd>{decision.candidateValue}</dd>
+                        </div>
+                      ) : null}
+                      {decision.candidateSourceDocument ? (
+                        <div>
+                          <dt className="font-semibold text-slate-900">
+                            Candidate source
+                          </dt>
+                          <dd>
+                            {decision.candidateSourceDocument}
+                            {decision.candidateObservedDate
+                              ? `, observed ${decision.candidateObservedDate}`
+                              : ""}
+                          </dd>
+                        </div>
+                      ) : null}
+                      {decision.candidateEvidence ? (
+                        <div>
+                          <dt className="font-semibold text-slate-900">
+                            Evidence
+                          </dt>
+                          <dd>{decision.candidateEvidence}</dd>
+                        </div>
+                      ) : null}
+                      {decision.officialValueBefore ||
+                      decision.resultingOfficialValue ? (
+                        <div>
+                          <dt className="font-semibold text-slate-900">
+                            Official outcome
+                          </dt>
+                          <dd>
+                            {decision.officialValueBefore ?? "Unknown"} to{" "}
+                            {decision.resultingOfficialValue ?? "Unknown"}
+                          </dd>
+                        </div>
+                      ) : null}
+                      {decision.actor ? (
+                        <div>
+                          <dt className="font-semibold text-slate-900">
+                            Actor
+                          </dt>
+                          <dd>{decision.actor}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       </aside>
     </div>

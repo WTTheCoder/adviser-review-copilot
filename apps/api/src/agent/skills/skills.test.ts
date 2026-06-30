@@ -22,6 +22,7 @@ import {
   createReviewTools,
   type ReviewToolService
 } from "../tools/reviewTools.js";
+import type { FactForReview } from "../../services/reviewService.js";
 import { createDocumentTools } from "../tools/documentTools.js";
 import { MockCandidateFactExtractor } from "../../ai/providers/mockCandidateFactExtractor.js";
 import type {
@@ -42,8 +43,6 @@ const createCandidateFact = (
   proposedValue,
   confidence: "MEDIUM",
   evidence: `Evidence for ${proposedValue}`,
-  sourceRecordId: "source-meeting-note",
-  observedDate: "2026-06-04",
   requiresHumanReview: true
 });
 
@@ -85,6 +84,45 @@ const buildSummaryMetrics = (review: ReviewResponse) => {
 const metricValue = (review: ReviewResponse, label: string) =>
   review.summaryMetrics.find((metric) => metric.label === label)?.value;
 
+const legacyFactsForReview = (review: ReviewResponse): FactForReview[] =>
+  review.clientFacts.map((fact) => ({
+    id: fact.id,
+    field: fact.field,
+    officialValue: fact.officialValue,
+    candidateValue: fact.candidateValue,
+    previousValue: fact.previousValue,
+    sourceRecordId: fact.sourceRecordId,
+    observedAt: new Date(fact.observedAt),
+    officialSourceRecordId: fact.officialSourceRecordId,
+    officialObservedAt: new Date(fact.officialObservedAt),
+    previousSourceRecordId: fact.previousSourceRecordId,
+    previousObservedAt: fact.previousObservedAt
+      ? new Date(fact.previousObservedAt)
+      : null,
+    candidateSourceRecordId: fact.candidateSourceRecordId,
+    candidateObservedAt: fact.candidateObservedAt
+      ? new Date(fact.candidateObservedAt)
+      : null,
+    candidateEvidence: fact.candidateEvidence,
+    confidence: fact.confidence,
+    lifecycleStatus: fact.lifecycleStatus,
+    explanation: fact.memoryExplanation,
+    officialSourceRecord: {
+      title: fact.officialSourceDocument
+    },
+    previousSourceRecord: fact.previousSourceDocument
+      ? {
+          title: fact.previousSourceDocument
+        }
+      : null,
+    candidateSourceRecord: fact.candidateSourceDocument
+      ? {
+          title: fact.candidateSourceDocument
+        }
+      : null,
+    adviserDecisions: []
+  }));
+
 const createReview = (): ReviewResponse => ({
   client: {
     id: "demo-alex-taylor",
@@ -104,10 +142,24 @@ const createReview = (): ReviewResponse => ({
       officialValue: "East Perth",
       candidateValue: "Subiaco",
       previousValue: null,
-      sourceRecordId: "source-meeting-note",
-      sourceDocument: "Adviser Meeting Note",
-      observedAt: "2026-06-04T00:00:00.000Z",
-      observedDate: "4 June 2026",
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex may have moved to Subiaco, but the address has not been confirmed.",
       confidence: "Medium",
       lifecycleStatus: "NEEDS_CONFIRMATION",
       status: "Needs confirmation",
@@ -121,10 +173,24 @@ const createReview = (): ReviewResponse => ({
       officialValue: "Balanced",
       candidateValue: "Growth-oriented",
       previousValue: null,
-      sourceRecordId: "source-meeting-note",
-      sourceDocument: "Adviser Meeting Note",
-      observedAt: "2026-06-04T00:00:00.000Z",
-      observedDate: "4 June 2026",
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex is considering a more growth-oriented investment approach.",
       confidence: "Medium",
       lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
       status: "Requires adviser approval",
@@ -206,35 +272,45 @@ const createHarness = (
         lifecycleStatus: "CURRENT"
       }
     ],
-    getLegacyFacts: async () => []
+    getLegacyFacts: async () => legacyFactsForReview(review)
   } satisfies LegacyCrmToolAdapter;
 
   const reviewService = {
-    createWorkflowRun: async () => ({ id: "workflow-1" }),
-    recordWorkflowStep: async (
-      input: Parameters<ReviewToolService["recordWorkflowStep"]>[0]
-    ) => {
-      workflowSteps.push({
-        label: input.label,
-        status: input.status,
-        detail: input.detail ?? null
-      });
-      return { id: `step-${workflowSteps.length}` };
-    },
-    applyExtractedCandidateProjection: async (_clientId, candidates) => {
+    captureClientMutationEpoch: async () => 0,
+    commitPreparedReview: async (input) => {
+      workflowSteps.splice(
+        0,
+        workflowSteps.length,
+        ...input.workflowSteps.map((step) => ({
+          label: step.label,
+          status: step.status,
+          detail: step.detail ?? null
+        }))
+      );
       const address = review.clientFacts.find((fact) => fact.id === "fact-address");
       const risk = review.clientFacts.find(
         (fact) => fact.id === "fact-risk-profile"
       );
-      const extractedAddress = candidates.find(
+      const extractedAddress = input.candidates.find(
         (candidate) => candidate.field === "ADDRESS"
       );
-      const extractedRisk = candidates.find(
+      const extractedRisk = input.candidates.find(
         (candidate) => candidate.field === "RISK_PROFILE"
       );
 
       if (address) {
         address.candidateValue = extractedAddress?.proposedValue ?? null;
+        address.candidateSourceRecordId = extractedAddress?.sourceRecordId ?? null;
+        address.candidateSourceDocument = extractedAddress
+          ? "Adviser Meeting Note"
+          : null;
+        address.candidateObservedAt = extractedAddress
+          ? `${extractedAddress.observedDate}T00:00:00.000Z`
+          : null;
+        address.candidateObservedDate = extractedAddress
+          ? "4 June 2026"
+          : null;
+        address.candidateEvidence = extractedAddress?.evidence ?? null;
         address.lifecycleStatus = extractedAddress
           ? "NEEDS_CONFIRMATION"
           : "CURRENT";
@@ -243,11 +319,28 @@ const createHarness = (
 
       if (risk) {
         risk.candidateValue = extractedRisk?.proposedValue ?? null;
+        risk.candidateSourceRecordId = extractedRisk?.sourceRecordId ?? null;
+        risk.candidateSourceDocument = extractedRisk
+          ? "Adviser Meeting Note"
+          : null;
+        risk.candidateObservedAt = extractedRisk
+          ? `${extractedRisk.observedDate}T00:00:00.000Z`
+          : null;
+        risk.candidateObservedDate = extractedRisk
+          ? "4 June 2026"
+          : null;
+        risk.candidateEvidence = extractedRisk?.evidence ?? null;
         risk.lifecycleStatus = extractedRisk
           ? "REQUIRES_ADVISER_APPROVAL"
           : "CURRENT";
         risk.status = extractedRisk ? "Requires adviser approval" : "Current";
       }
+
+      return {
+        ...review,
+        summaryMetrics: buildSummaryMetrics(review),
+        workflowTrace: workflowSteps
+      };
     },
     createUploadedSourceRecord: async (input) => ({
       status: "stored",
@@ -298,18 +391,60 @@ const createHarness = (
 
       if (fact && payload.decision === DecisionType.CONFIRM) {
         fact.previousValue = fact.officialValue;
+        fact.previousSourceRecordId = fact.officialSourceRecordId;
+        fact.previousSourceDocument = fact.officialSourceDocument;
+        fact.previousObservedAt = fact.officialObservedAt;
+        fact.previousObservedDate = fact.officialObservedDate;
         fact.officialValue = fact.candidateValue ?? fact.officialValue;
         fact.currentValue = fact.officialValue;
+        fact.officialSourceRecordId =
+          fact.candidateSourceRecordId ?? fact.officialSourceRecordId;
+        fact.officialSourceDocument =
+          fact.candidateSourceDocument ?? fact.officialSourceDocument;
+        fact.officialObservedAt =
+          fact.candidateObservedAt ?? fact.officialObservedAt;
+        fact.officialObservedDate =
+          fact.candidateObservedDate ?? fact.officialObservedDate;
+        fact.sourceRecordId = fact.officialSourceRecordId;
+        fact.sourceDocument = fact.officialSourceDocument;
+        fact.observedAt = fact.officialObservedAt;
+        fact.observedDate = fact.officialObservedDate;
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
 
       if (fact && payload.decision === DecisionType.APPROVE) {
         fact.previousValue = fact.officialValue;
+        fact.previousSourceRecordId = fact.officialSourceRecordId;
+        fact.previousSourceDocument = fact.officialSourceDocument;
+        fact.previousObservedAt = fact.officialObservedAt;
+        fact.previousObservedDate = fact.officialObservedDate;
         fact.officialValue = fact.candidateValue ?? fact.officialValue;
         fact.currentValue = fact.officialValue;
+        fact.officialSourceRecordId =
+          fact.candidateSourceRecordId ?? fact.officialSourceRecordId;
+        fact.officialSourceDocument =
+          fact.candidateSourceDocument ?? fact.officialSourceDocument;
+        fact.officialObservedAt =
+          fact.candidateObservedAt ?? fact.officialObservedAt;
+        fact.officialObservedDate =
+          fact.candidateObservedDate ?? fact.officialObservedDate;
+        fact.sourceRecordId = fact.officialSourceRecordId;
+        fact.sourceDocument = fact.officialSourceDocument;
+        fact.observedAt = fact.officialObservedAt;
+        fact.observedDate = fact.officialObservedDate;
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
@@ -320,14 +455,41 @@ const createHarness = (
           payload.decision === DecisionType.KEEP_CURRENT)
       ) {
         fact.candidateValue = null;
+        fact.candidateSourceRecordId = null;
+        fact.candidateSourceDocument = null;
+        fact.candidateObservedAt = null;
+        fact.candidateObservedDate = null;
+        fact.candidateEvidence = null;
         fact.lifecycleStatus = "CURRENT";
         fact.status = "Current";
       }
 
+      workflowSteps.splice(
+        0,
+        workflowSteps.length,
+        ...[
+          "Skill selected: apply-adviser-decision",
+          "Skill input validated",
+          "Adviser decision persisted through controlled tool",
+          "Fact state reconciled after adviser decision",
+          "Skill output validated",
+          "Skill completed: apply-adviser-decision"
+        ].map((label) => ({
+          label,
+          status: "COMPLETE" as const,
+          detail: null
+        }))
+      );
+
       return {
+        committed: true,
+        refreshRequired: false,
+        message: null,
+        review: {
         ...review,
         summaryMetrics: buildSummaryMetrics(review),
-        workflowTrace: review.workflowTrace
+        workflowTrace: workflowSteps
+        }
       };
     }
   } satisfies ReviewToolService;
@@ -436,6 +598,7 @@ describe("required skills", () => {
     expect(result.metadata.events.map((event) => event.label)).toEqual([
       "Skill selected: ingest-client-document",
       "Skill input validated",
+      "Tool invoked: review.captureClientMutationEpoch",
       "Upload metadata validated",
       "Tool invoked: document.validateTextUpload",
       "Text upload validated",
@@ -620,9 +783,8 @@ describe("required skills", () => {
       ReturnType<ReviewToolService["createUploadedSourceRecord"]>
     >;
     const invalidToolOutputService = {
-      createWorkflowRun: async () => ({ id: "workflow-1" }),
-      recordWorkflowStep: async () => ({ id: "step-1" }),
-      applyExtractedCandidateProjection: async () => undefined,
+      captureClientMutationEpoch: async () => 0,
+      commitPreparedReview: async () => review,
       createUploadedSourceRecord: async () => invalidUploadResponse,
       buildReviewResponse: async () => review,
       recordDecision: async () => {
@@ -747,7 +909,8 @@ describe("required skills", () => {
       candidateValue: "High Growth",
       previousValue: null,
       lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
-      sourceRecordId: "source-meeting-note"
+      sourceRecordId: "source-annual-review",
+      candidateSourceRecordId: "source-meeting-note"
     });
     expect(
       result.ok
@@ -759,6 +922,87 @@ describe("required skills", () => {
         ? metricValue(result.output, "Items needing confirmation")
         : null
     ).toBe("2");
+  });
+
+  it("withholds live contradictory risk-profile evidence instead of projecting a candidate", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult(
+          [
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Alex is considering High Growth."
+            },
+            {
+              ...createCandidateFact("RISK_PROFILE", "Balanced"),
+              evidence: "Alex has decided to remain Balanced."
+            }
+          ],
+          "openai"
+        )
+    });
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk?.officialValue).toBe("Balanced");
+    expect(risk?.candidateValue).toBeNull();
+    expect(risk?.lifecycleStatus).toBe("CURRENT");
+    expect(
+      result.ok ? result.output.extractionMetadata?.warnings.join(" ") : ""
+    ).toContain("conflicting evidence also supports the current official value");
+    expect(
+      result.ok
+        ? result.output.workflowTrace.some((step) =>
+            step.label.includes("Extracted candidates reconciled with official facts")
+          )
+        : false
+    ).toBe(true);
+  });
+
+  it("merges duplicate live assertions before projecting a supported candidate", async () => {
+    const { harness } = createHarness({
+      extract: async () =>
+        createExtractionResult(
+          [
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Client may move to High Growth."
+            },
+            {
+              ...createCandidateFact("RISK_PROFILE", "High Growth"),
+              evidence: "Client is considering High Growth."
+            }
+          ],
+          "openai"
+        )
+    });
+
+    const result = await harness.execute(
+      "prepare-annual-review",
+      { clientId: "demo-alex-taylor" },
+      reviewResponseSchema,
+      "demo-alex-taylor"
+    );
+    const risk = result.ok
+      ? result.output.clientFacts.find((fact) => fact.id === "fact-risk-profile")
+      : null;
+
+    expect(risk).toMatchObject({
+      officialValue: "Balanced",
+      candidateValue: "High Growth",
+      candidateEvidence:
+        "Client is considering High Growth. | Client may move to High Growth.",
+      lifecycleStatus: "REQUIRES_ADVISER_APPROVAL"
+    });
+    expect(result.ok ? result.output.extractionMetadata?.warnings : null).toEqual([]);
   });
 
   it("resolves Joondalup and High Growth with existing metric semantics", async () => {
@@ -885,7 +1129,9 @@ describe("required skills", () => {
     expect(risk?.lifecycleStatus).toBe("REQUIRES_ADVISER_APPROVAL");
     expect(
       result.ok
-        ? JSON.stringify(result.output.clientFacts).includes(freeFormPhrase)
+        ? result.output.clientFacts.some(
+            (fact) => fact.candidateValue === freeFormPhrase
+          )
         : true
     ).toBe(false);
   });
@@ -921,7 +1167,7 @@ describe("required skills", () => {
     expect(
       result.ok
         ? result.output.workflowTrace.some((step) =>
-            step.label.includes("Unsupported extracted candidates omitted")
+            step.label.includes("Extracted candidates reconciled with official facts")
           )
         : false
     ).toBe(true);

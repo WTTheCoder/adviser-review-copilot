@@ -27,9 +27,17 @@ export const ingestClientDocumentSkill: SkillDefinition<
     "document.validateTextUpload",
     "document.validatePdfUpload",
     "document.extractPdfText",
+    "review.captureClientMutationEpoch",
     "review.createUploadedSourceRecord"
   ],
   execute: async (input, context) => {
+    const epoch = await context.toolRegistry.execute(
+      "review.captureClientMutationEpoch",
+      { clientId: input.clientId },
+      ingestClientDocumentSkill.allowedTools,
+      context,
+      z.object({ mutationEpoch: z.number().int().nonnegative() })
+    );
     context.recordEvent({ label: "Upload metadata validated" });
 
     const validated =
@@ -73,7 +81,10 @@ export const ingestClientDocumentSkill: SkillDefinition<
 
     const stored = await context.toolRegistry.execute(
       "review.createUploadedSourceRecord",
-      document,
+      {
+        ...document,
+        expectedMutationEpoch: epoch.mutationEpoch
+      },
       ingestClientDocumentSkill.allowedTools,
       context,
       uploadResponseOutputSchema

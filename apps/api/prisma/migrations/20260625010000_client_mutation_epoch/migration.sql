@@ -1,0 +1,2 @@
+ALTER TABLE "Client"
+ADD COLUMN "mutationEpoch" INTEGER NOT NULL DEFAULT 0;
