@@ -756,7 +756,7 @@ export const createReviewService = (
 
       await transaction.adviserDecision.create({
         data: {
-          id: `decision-${factId}-${payload.decision}-${Date.now()}`,
+          id: `decision-${factId}-${payload.decision}-${randomUUID()}`,
           clientId,
           factId,
           decisionType: payload.decision,
@@ -779,7 +779,7 @@ export const createReviewService = (
 
       const run = await transaction.workflowRun.create({
         data: {
-          id: `workflow-${clientId}-apply-adviser-decision-v1-${Date.now()}`,
+          id: `workflow-${clientId}-apply-adviser-decision-v1-${randomUUID()}`,
           clientId,
           status: WorkflowRunStatus.PREPARED,
           completedAt: new Date()
@@ -842,7 +842,7 @@ export const createReviewService = (
     warnings?: string[];
   }): Promise<DocumentUploadResult> => {
     const uploadedAt = new Date();
-    const sourceRecordId = `source-upload-${input.clientId}-${uploadedAt.getTime()}`;
+    const sourceRecordId = `source-upload-${input.clientId}-${randomUUID()}`;
     const upload = uploadSourceMetadataSchema.parse({
       origin: "UPLOAD" as const,
       documentType: input.documentType,

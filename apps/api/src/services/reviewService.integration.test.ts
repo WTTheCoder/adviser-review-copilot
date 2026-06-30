@@ -5,7 +5,7 @@ import {
   SourceRecordType,
   WorkflowStepStatus
 } from "@prisma/client";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedDemoData, DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
 import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
 import {
@@ -113,13 +113,174 @@ const commitPreparation = async (
     workflowSteps: preparationSteps
   });
 
+const createUploadedSourceInput = (
+  expectedMutationEpoch: number,
+  safeFilename: string,
+  text: string
+) =>
+  ({
+    documentType: "TEXT",
+    clientId: DEMO_CLIENT_ID,
+    expectedMutationEpoch,
+    observedDate: "2026-06-20",
+    sourceType: "ADVISER_MEETING_NOTE",
+    safeFilename,
+    mediaType: "text/plain",
+    text,
+    characterCount: text.length,
+    byteCount: Buffer.byteLength(text),
+    originalByteCount: Buffer.byteLength(text)
+  }) as const;
+
 describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     await resetCanonicalData();
   });
 
   afterAll(async () => {
+    vi.useRealTimers();
     await Promise.all([primary.$disconnect(), secondary.$disconnect()]);
+  });
+
+  it("persists two uploaded source records with distinct IDs when time is frozen", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-30T12:00:00.000Z"));
+    const coordinator = new ClientOperationCoordinator();
+    const service = createReviewService(
+      primary,
+      coordinator
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    const [first, second] = await coordinator.runClientMutation(
+      DEMO_CLIENT_ID,
+      () =>
+        Promise.all([
+          service.createUploadedSourceRecord(
+            createUploadedSourceInput(
+              expectedMutationEpoch,
+              "first-note.txt",
+              "First uploaded note."
+            )
+          ),
+          service.createUploadedSourceRecord(
+            createUploadedSourceInput(
+              expectedMutationEpoch,
+              "second-note.txt",
+              "Second uploaded note."
+            )
+          )
+        ])
+    );
+
+    expect(first.sourceRecord.id).toMatch(
+      /^source-upload-demo-alex-taylor-[0-9a-f-]{36}$/
+    );
+    expect(second.sourceRecord.id).toMatch(
+      /^source-upload-demo-alex-taylor-[0-9a-f-]{36}$/
+    );
+    expect(first.sourceRecord.id).not.toBe(second.sourceRecord.id);
+    expect(first.sourceRecord.upload.uploadedAt).toBe(
+      "2026-06-30T12:00:00.000Z"
+    );
+    expect(second.sourceRecord.upload.uploadedAt).toBe(
+      "2026-06-30T12:00:00.000Z"
+    );
+    await expect(
+      primary.sourceRecord.findMany({
+        where: { id: { in: [first.sourceRecord.id, second.sourceRecord.id] } },
+        orderBy: { title: "asc" },
+        select: { id: true, title: true, content: true }
+      })
+    ).resolves.toMatchObject([
+      {
+        id: first.sourceRecord.id,
+        title: "Uploaded: first-note.txt",
+        content: {
+          lines: ["First uploaded note."]
+        }
+      },
+      {
+        id: second.sourceRecord.id,
+        title: "Uploaded: second-note.txt",
+        content: {
+          lines: ["Second uploaded note."]
+        }
+      }
+    ]);
+  });
+
+  it("persists distinct adviser decision and workflow audit IDs when time is frozen", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-30T12:00:00.000Z"));
+    const service = createReviewService(
+      primary,
+      new ClientOperationCoordinator()
+    );
+
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-risk-profile", {
+      decision: DecisionType.APPROVE
+    });
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-address", {
+      decision: DecisionType.CONFIRM
+    });
+
+    const decisions = await primary.adviserDecision.findMany({
+      where: {
+        clientId: DEMO_CLIENT_ID,
+        factId: { in: ["fact-risk-profile", "fact-address"] }
+      },
+      orderBy: { factId: "asc" },
+      select: { id: true, factId: true, decisionType: true }
+    });
+    const workflowRuns = await primary.workflowRun.findMany({
+      where: {
+        clientId: DEMO_CLIENT_ID,
+        id: {
+          startsWith: `workflow-${DEMO_CLIENT_ID}-apply-adviser-decision-v1-`
+        }
+      },
+      orderBy: { id: "asc" },
+      select: { id: true, steps: { select: { id: true } } }
+    });
+
+    expect(decisions).toHaveLength(2);
+    expect(new Set(decisions.map((decision) => decision.id)).size).toBe(2);
+    expect(decisions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringMatching(
+            /^decision-fact-address-CONFIRM-[0-9a-f-]{36}$/
+          ),
+          factId: "fact-address",
+          decisionType: DecisionType.CONFIRM
+        }),
+        expect.objectContaining({
+          id: expect.stringMatching(
+            /^decision-fact-risk-profile-APPROVE-[0-9a-f-]{36}$/
+          ),
+          factId: "fact-risk-profile",
+          decisionType: DecisionType.APPROVE
+        })
+      ])
+    );
+    expect(workflowRuns).toHaveLength(2);
+    expect(new Set(workflowRuns.map((run) => run.id)).size).toBe(2);
+    expect(workflowRuns.every((run) => run.steps.length === 6)).toBe(true);
+    expect(await factState("fact-risk-profile")).toMatchObject({
+      officialValue: "Growth-oriented",
+      candidateValue: null,
+      lifecycleStatus: LifecycleStatus.CURRENT,
+      revision: 1
+    });
+    expect(await factState("fact-address")).toMatchObject({
+      officialValue: "Subiaco",
+      candidateValue: null,
+      lifecycleStatus: LifecycleStatus.CURRENT,
+      revision: 1
+    });
   });
 
   it.each([
