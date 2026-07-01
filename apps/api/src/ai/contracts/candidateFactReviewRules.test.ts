@@ -163,6 +163,119 @@ describe("candidate fact review rules", () => {
     ]);
   });
 
+  it("uses newer provenance when duplicate assertions normalize to the same value", () => {
+    const result = reconcileCandidateFactsWithDiagnostics(
+      [
+        {
+          ...createCandidate("ADDRESS", "subiaco"),
+          sourceRecordId: "source-meeting-note",
+          observedDate: "2026-06-04",
+          evidence: "Older meeting note says Subiaco."
+        },
+        {
+          ...createCandidate("ADDRESS", "Subiaco"),
+          sourceRecordId: "source-upload-pdf",
+          observedDate: "2026-06-13",
+          evidence: "Newer uploaded PDF says Subiaco."
+        }
+      ],
+      [
+        {
+          field: "ADDRESS",
+          officialValue: "East Perth",
+          officialObservedAt: "2026-06-01T00:00:00.000Z"
+        }
+      ]
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.classifications).toEqual([
+      expect.objectContaining({
+        field: "ADDRESS",
+        proposedValue: "Subiaco",
+        sourceRecordId: "source-upload-pdf",
+        observedDate: "2026-06-13",
+        evidence:
+          "Newer uploaded PDF says Subiaco. | Older meeting note says Subiaco."
+      })
+    ]);
+  });
+
+  it("uses higher confidence when duplicate assertions have the same date", () => {
+    const result = reconcileCandidateFactsWithDiagnostics(
+      [
+        {
+          ...createCandidate("RISK_PROFILE", "Growth-oriented"),
+          confidence: "LOW",
+          sourceRecordId: "source-upload-a",
+          observedDate: "2026-06-13",
+          evidence: "Low confidence growth-oriented evidence."
+        },
+        {
+          ...createCandidate(
+            "RISK_PROFILE",
+            "More growth-oriented investment approach"
+          ),
+          confidence: "HIGH",
+          sourceRecordId: "source-upload-b",
+          observedDate: "2026-06-13",
+          evidence: "Alex is considering a growth-oriented approach."
+        }
+      ],
+      [
+        {
+          field: "RISK_PROFILE",
+          officialValue: "Balanced",
+          officialObservedAt: "2026-06-01T00:00:00.000Z"
+        }
+      ]
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.classifications[0]).toMatchObject({
+      field: "RISK_PROFILE",
+      proposedValue: "Growth-oriented",
+      sourceRecordId: "source-upload-b",
+      observedDate: "2026-06-13"
+    });
+  });
+
+  it("uses stable source ID ordering for complete duplicate assertion ties", () => {
+    const result = reconcileCandidateFactsWithDiagnostics(
+      [
+        {
+          ...createCandidate("ADDRESS", "Subiaco"),
+          confidence: "MEDIUM",
+          sourceRecordId: "source-upload-b",
+          observedDate: "2026-06-13",
+          evidence: "Source B says Subiaco."
+        },
+        {
+          ...createCandidate("ADDRESS", "subiaco"),
+          confidence: "MEDIUM",
+          sourceRecordId: "source-upload-a",
+          observedDate: "2026-06-13",
+          evidence: "Source A says Subiaco."
+        }
+      ],
+      [
+        {
+          field: "ADDRESS",
+          officialValue: "East Perth",
+          officialObservedAt: "2026-06-01T00:00:00.000Z"
+        }
+      ]
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.classifications[0]).toMatchObject({
+      field: "ADDRESS",
+      proposedValue: "Subiaco",
+      sourceRecordId: "source-upload-a",
+      observedDate: "2026-06-13"
+    });
+  });
+
   it("withholds conflicting risk-profile assertions instead of choosing by order", () => {
     const result = reconcileCandidateFactsWithDiagnostics(
       [

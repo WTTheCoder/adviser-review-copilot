@@ -112,6 +112,44 @@ const compareCalendarDates = (
   return 0;
 };
 
+const candidateDateTime = (candidate: TrustedCandidateFact) => {
+  const parsed = Date.parse(`${candidate.observedDate.slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const confidenceRank: Record<TrustedCandidateFact["confidence"], number> = {
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3
+};
+
+type EvaluatedCandidate = {
+  candidate: TrustedCandidateFact;
+  normalizedValue: string;
+};
+
+const selectRepresentativeAssertion = (
+  items: readonly EvaluatedCandidate[]
+) =>
+  [...items].sort((first, second) => {
+    const dateDifference =
+      candidateDateTime(second.candidate) - candidateDateTime(first.candidate);
+    if (dateDifference !== 0) {
+      return dateDifference;
+    }
+
+    const confidenceDifference =
+      confidenceRank[second.candidate.confidence] -
+      confidenceRank[first.candidate.confidence];
+    if (confidenceDifference !== 0) {
+      return confidenceDifference;
+    }
+
+    return first.candidate.sourceRecordId.localeCompare(
+      second.candidate.sourceRecordId
+    );
+  })[0];
+
 const mergeEvidence = (candidates: readonly TrustedCandidateFact[]) =>
   [...new Set(candidates.map((candidate) => candidate.evidence.trim()).filter(Boolean))]
     .sort((first, second) => first.localeCompare(second))
@@ -201,8 +239,9 @@ export const reconcileCandidateFactsWithDiagnostics = (
         continue;
       }
 
-      const normalizedValue = changeItems[0]?.normalizedValue;
-      const source = changeItems[0]?.candidate;
+      const representative = selectRepresentativeAssertion(changeItems);
+      const normalizedValue = representative?.normalizedValue;
+      const source = representative?.candidate;
 
       if (normalizedValue && source) {
         reconciled.push({
@@ -214,13 +253,31 @@ export const reconcileCandidateFactsWithDiagnostics = (
       continue;
     }
 
-    const candidateObservedDate = changeItems[0]?.candidate.observedDate ?? null;
-    const freshness = compareCalendarDates(
-      candidateObservedDate,
-      context?.officialObservedAt ?? null
-    );
     const combinedEvidence = mergeEvidence(
       evaluated.map((item) => item.candidate)
+    );
+    const changeValues = new Set(
+      changeItems.map((item) => normalizeGenericValue(item.normalizedValue))
+    );
+
+    if (changeValues.size > 1) {
+      warnings.push(
+        warningFor(field, "multiple proposed values conflict", combinedEvidence)
+      );
+      continue;
+    }
+
+    const representative = selectRepresentativeAssertion(changeItems);
+    const normalizedValue = representative?.normalizedValue;
+    const source = representative?.candidate;
+
+    if (!normalizedValue || !source) {
+      continue;
+    }
+
+    const freshness = compareCalendarDates(
+      source.observedDate,
+      context?.officialObservedAt ?? null
     );
 
     if (freshness === null) {
@@ -260,24 +317,6 @@ export const reconcileCandidateFactsWithDiagnostics = (
           combinedEvidence
         )
       );
-      continue;
-    }
-
-    const changeValues = new Set(
-      changeItems.map((item) => normalizeGenericValue(item.normalizedValue))
-    );
-
-    if (changeValues.size > 1) {
-      warnings.push(
-        warningFor(field, "multiple proposed values conflict", combinedEvidence)
-      );
-      continue;
-    }
-
-    const normalizedValue = changeItems[0]?.normalizedValue;
-    const source = changeItems[0]?.candidate;
-
-    if (!normalizedValue || !source) {
       continue;
     }
 
