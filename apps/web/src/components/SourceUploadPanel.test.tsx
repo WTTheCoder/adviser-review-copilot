@@ -22,6 +22,20 @@ describe("SourceUploadPanel", () => {
     expect(markup).toContain("OCR");
   });
 
+  it("defaults the editable observed date to the newer uploaded demo date", () => {
+    const markup = renderToStaticMarkup(
+      <SourceUploadPanel
+        apiBaseUrl="http://localhost:3001"
+        clientId="demo-alex-taylor"
+        resetToken={0}
+        onUploaded={() => undefined}
+      />
+    );
+
+    expect(markup).toContain('type="date"');
+    expect(markup).toContain('value="2026-06-13"');
+  });
+
   it("displays uploaded PDF metadata and extracted text as escaped plain text", () => {
     const record: SourceRecord = {
       id: "source-upload-pdf",
