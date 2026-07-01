@@ -57,9 +57,9 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
 
         {selectedRecord ? (
           <article className="mt-5 rounded border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-950">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+              <div className="min-w-0 pr-3">
+                <h3 className="break-words text-sm font-semibold text-slate-950">
                   {selectedRecord.title}
                 </h3>
                 <p className="mt-1 text-xs text-slate-600">
@@ -91,13 +91,15 @@ export const SourceRecordPanel = ({ records }: SourceRecordPanelProps) => {
                   </div>
                 ) : null}
               </div>
-              <StatusBadge
-                status={
-                  selectedRecord.lifecycleStatus === "SUPERSEDED"
-                    ? "Superseded"
-                    : "Current"
-                }
-              />
+              <div className="shrink-0 justify-self-end">
+                <StatusBadge
+                  status={
+                    selectedRecord.lifecycleStatus === "SUPERSEDED"
+                      ? "Superseded"
+                      : "Current"
+                  }
+                />
+              </div>
             </div>
             <p className="mt-3 text-sm leading-6 text-slate-600">
               {selectedRecord.summary}

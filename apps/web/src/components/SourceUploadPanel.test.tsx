@@ -57,4 +57,29 @@ describe("SourceUploadPanel", () => {
     expect(markup).toContain("&lt;script&gt;");
     expect(markup).not.toContain("<script>");
   });
+
+  it("keeps the selected source status badge inside the detail card with long titles", () => {
+    const record: SourceRecord = {
+      id: "source-long-title",
+      type: "ADVISER_MEETING_NOTE",
+      title:
+        "Uploaded: exceptionally-long-source-record-title-without-natural-breaks-2026-06-13-client-review-material.pdf",
+      observedAt: "2026-06-13T00:00:00.000Z",
+      observedDate: "13 June 2026",
+      summary: "Uploaded source with a long heading.",
+      content: ["Alex may have moved to Subiaco."],
+      lifecycleStatus: "CURRENT",
+      upload: null
+    };
+
+    const markup = renderToStaticMarkup(
+      <SourceRecordPanel records={[record]} />
+    );
+
+    expect(markup).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(markup).toContain("min-w-0 pr-3");
+    expect(markup).toContain("break-words");
+    expect(markup).toContain("shrink-0 justify-self-end");
+    expect(markup).toContain("Current");
+  });
 });
