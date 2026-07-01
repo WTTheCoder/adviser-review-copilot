@@ -51,7 +51,7 @@ export const SourceUploadPanel = ({
     createUploadSubmissionController()
   );
   const [file, setFile] = useState<File | null>(null);
-  const [observedDate, setObservedDate] = useState("2026-06-04");
+  const [observedDate, setObservedDate] = useState("2026-06-13");
   const [uploadState, setUploadState] = useState(initialUploadPanelState);
 
   const clearNativeFileInput = () => {
