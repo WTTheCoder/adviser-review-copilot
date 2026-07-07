@@ -34,17 +34,12 @@ export const AdviserNavigation = ({
         </div>
       </div>
       <nav className="mt-4 lg:mt-8" aria-label="Primary adviser views">
-        <div
-          className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible"
-          role="tablist"
-          aria-label="Adviser workspace views"
-        >
+        <div className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
           {navigationItems.map((item) => {
             const isActive = activeView === item.id;
 
             return (
               <button
-                aria-selected={isActive}
                 aria-current={isActive ? "page" : undefined}
                 className={`focus-ring flex min-w-fit items-center justify-between rounded px-3 py-2 text-left text-sm font-semibold transition lg:w-full ${
                   isActive
@@ -52,7 +47,6 @@ export const AdviserNavigation = ({
                     : "text-[var(--sidebar-muted)] hover:bg-white/10 hover:text-white"
                 }`}
                 key={item.id}
-                role="tab"
                 type="button"
                 onClick={() => onChange(item.id)}
               >

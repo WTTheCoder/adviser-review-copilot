@@ -97,14 +97,30 @@ body {
   .status-chip {
     display: inline-flex;
     align-items: center;
-    border-radius: 999px;
+    width: max-content;
+    max-width: 100%;
+    white-space: nowrap;
+    vertical-align: middle;
+    border-radius: 4px;
     border: 1px solid var(--border);
     background: var(--surface-subtle);
-    padding: 2px 8px;
+    padding: 2px 7px;
     font-size: 12px;
     font-weight: 700;
-    line-height: 18px;
+    line-height: 16px;
     color: var(--muted);
+  }
+
+  .status-chip-loading {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+    color: #475569;
+  }
+
+  .status-chip-info {
+    border-color: #99f6e4;
+    background: #f0fdfa;
+    color: #115e59;
   }
 
   .status-chip-warning {

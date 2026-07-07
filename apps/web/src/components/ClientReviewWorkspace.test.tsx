@@ -10,8 +10,11 @@ import type { ReviewResponse } from "@client-review-prep/shared";
 import {
   ClientReviewWorkspace,
   getWorkspaceTabAfterSelection,
+  initialLoadingIndicatorDelayMs,
+  nextWorkspaceTabFromKey,
   persistedValueForWorkspaceTab,
   readInitialWorkspaceTab,
+  scheduleInitialLoadingIndicator,
   WorkspaceTabs,
   workspaceTabFromPersistedValue,
   workspaceTabStorageKey,
@@ -230,6 +233,24 @@ const findElement = (
   return null;
 };
 
+const findElements = (
+  node: ReactNode,
+  predicate: (element: InspectableElement) => boolean
+): InspectableElement[] => {
+  if (!isValidElement<InspectableProps>(node)) {
+    return [];
+  }
+
+  const matches = predicate(node) ? [node] : [];
+
+  return [
+    ...matches,
+    ...Children.toArray(node.props.children).flatMap((child) =>
+      findElements(child, predicate)
+    )
+  ];
+};
+
 const textContent = (node: ReactNode): string =>
   Children.toArray(node)
     .map((child) => {
@@ -247,6 +268,7 @@ const textContent = (node: ReactNode): string =>
 
 describe("ClientReviewWorkspace", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -271,7 +293,7 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain("Demo controls");
   });
 
-  it("renders accessible workspace tabs and wires tab switching callbacks", () => {
+  it("renders complete accessible workspace tab semantics", () => {
     const onChange = vi.fn();
     const tree = (
       <WorkspaceTabs activeTab="review" onChange={onChange} tabPrefix="client" />
@@ -292,11 +314,77 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('role="tab"');
     expect(markup).toContain('aria-selected="true"');
-    expect(markup).toContain('aria-controls="client-review"');
+    expect(markup).toContain('aria-controls="client-review-panel"');
+    expect(markup).toContain('id="client-review-tab"');
+    expect(markup).toContain('tabindex="0"');
+    expect(markup).toContain('tabindex="-1"');
 
     (evidenceTab?.props.onClick as () => void)();
 
     expect(onChange).toHaveBeenCalledWith("evidence");
+  });
+
+  it("keeps every workspace tabpanel in the DOM with hidden inactive panels", () => {
+    const markup = renderWorkspace();
+
+    expect(markup).toContain('id="');
+    expect(markup).toContain('-review-panel"');
+    expect(markup).toContain('-evidence-panel"');
+    expect(markup).toContain('-history-panel"');
+    expect(markup).toContain('-summary-panel"');
+    expect(markup).toContain('role="tabpanel"');
+    expect(markup).toContain('aria-labelledby="');
+    expect(markup).toContain("-review-tab");
+    expect(markup).toContain("-evidence-tab");
+    expect(markup).toContain("-history-tab");
+    expect(markup).toContain("-summary-tab");
+    expect(markup).toContain('hidden=""');
+  });
+
+  it("supports roving tab keyboard navigation for workspace tabs", () => {
+    const onChange = vi.fn();
+    const focus = vi.fn();
+    const getElementById = vi.fn(() => ({ focus }));
+    vi.stubGlobal("document", { getElementById });
+    const tabTree = WorkspaceTabs({
+      activeTab: "review",
+      onChange,
+      tabPrefix: "client"
+    });
+    const tabs = findElements(
+      tabTree,
+      (element) => element.type === "button" && element.props.role === "tab"
+    );
+    const reviewTab = tabs.find(
+      (tab) => textContent(tab.props.children) === "Review"
+    );
+    const evidenceTab = tabs.find(
+      (tab) => textContent(tab.props.children) === "Evidence & Sources"
+    );
+    const preventDefault = vi.fn();
+
+    expect(reviewTab?.props.tabIndex).toBe(0);
+    expect(evidenceTab?.props.tabIndex).toBe(-1);
+
+    (
+      reviewTab?.props.onKeyDown as (event: {
+        key: string;
+        preventDefault: () => void;
+      }) => void
+    )({ key: "ArrowRight", preventDefault });
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith("evidence");
+    expect(getElementById).toHaveBeenCalledWith("client-evidence-tab");
+    expect(focus).toHaveBeenCalled();
+  });
+
+  it("maps workspace keyboard shortcuts deterministically", () => {
+    expect(nextWorkspaceTabFromKey("review", "ArrowRight")).toBe("evidence");
+    expect(nextWorkspaceTabFromKey("review", "ArrowLeft")).toBe("summary");
+    expect(nextWorkspaceTabFromKey("evidence", "Home")).toBe("review");
+    expect(nextWorkspaceTabFromKey("evidence", "End")).toBe("summary");
+    expect(nextWorkspaceTabFromKey("history", "Tab")).toBeNull();
   });
 
   it("restores Client Summary from session storage on refresh", () => {
@@ -430,6 +518,65 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).not.toContain("fictional");
     expect(markup).not.toContain("does not call AI");
     expect(markup).not.toContain("production CRM");
+  });
+
+  it("does not immediately present loading as an unprepared review", () => {
+    const markup = renderWorkspace({
+      isLoading: true,
+      isPrepared: false,
+      prepareButtonLabel: "Prepare Client Review",
+      reviewData: null,
+      reviewStatus: "Ready to prepare"
+    });
+
+    expect(markup).not.toContain("Loading review data");
+    expect(markup).not.toContain("Review loading");
+    expect(markup).not.toContain("Adviser loading");
+    expect(markup).not.toContain("Actions loading");
+    expect(markup).not.toContain(">Ready to prepare<");
+    expect(markup).not.toContain("0 open actions");
+    expect(markup).not.toContain(">Prepare Client Review</button>");
+    expect(markup).toContain("disabled=");
+  });
+
+  it("delays the loading indicator on fast refresh", () => {
+    vi.useFakeTimers();
+    const onVisible = vi.fn();
+    const cancel = scheduleInitialLoadingIndicator(onVisible);
+
+    vi.advanceTimersByTime(initialLoadingIndicatorDelayMs - 1);
+    expect(onVisible).not.toHaveBeenCalled();
+
+    cancel();
+    vi.advanceTimersByTime(1);
+    expect(onVisible).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("shows delayed loading only after the loading threshold", () => {
+    vi.useFakeTimers();
+    const onVisible = vi.fn();
+    scheduleInitialLoadingIndicator(onVisible);
+
+    vi.advanceTimersByTime(initialLoadingIndicatorDelayMs);
+
+    expect(onVisible).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("renders real review data instead of delayed loading once data arrives", () => {
+    const markup = renderWorkspace({
+      isLoading: false,
+      isPrepared: true,
+      reviewData: review
+    });
+
+    expect(markup).toContain("Alex Taylor");
+    expect(markup).toContain("2026 Client Review");
+    expect(markup).toContain("Re-run Preparation");
+    expect(markup).not.toContain("Loading review data");
+    expect(markup).not.toContain("Client review loading");
   });
 
   it("renders selected fact evidence without changing the drawer behaviour", () => {

@@ -58,11 +58,12 @@ describe("AdviserNavigation", () => {
     );
 
     expect(markup).toContain('aria-label="Primary adviser views"');
-    expect(markup).toContain('role="tablist"');
+    expect(markup).not.toContain('role="tablist"');
+    expect(markup).not.toContain('role="tab"');
     expect(markup).toContain("Overview");
     expect(markup).toContain("My Actions");
     expect(markup).toContain("Client Review");
-    expect(markup).toContain('aria-selected="true"');
+    expect(markup).not.toContain("aria-selected");
     expect(markup).toContain('aria-current="page"');
     expect(markup).toContain("Jordan Lee");
   });
@@ -75,10 +76,23 @@ describe("AdviserNavigation", () => {
     });
     const myActions = findButtonByText(tree, "My Actions");
 
-    expect(myActions?.props.role).toBe("tab");
+    expect(myActions?.props.role).toBeUndefined();
+    expect(myActions?.props["aria-current"]).toBeUndefined();
     expect(myActions?.props.onClick).toBeTypeOf("function");
     (myActions?.props.onClick as () => void)();
 
     expect(onChange).toHaveBeenCalledWith("my-actions");
+  });
+
+  it("marks only the active destination as the current page", () => {
+    const tree = AdviserNavigation({
+      activeView: "client-review",
+      onChange: () => undefined
+    });
+    const overview = findButtonByText(tree, "Overview");
+    const clientReview = findButtonByText(tree, "Client Review");
+
+    expect(overview?.props["aria-current"]).toBeUndefined();
+    expect(clientReview?.props["aria-current"]).toBe("page");
   });
 });

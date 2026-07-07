@@ -4,6 +4,7 @@ import {
   type ActionQueueCategory,
   type DashboardAttentionItem
 } from "../domain/reviewSelectors.js";
+import { StatusBadge } from "./StatusBadge.js";
 
 type MyActionsProps = {
   review: ReviewResponse;
@@ -12,8 +13,8 @@ type MyActionsProps = {
 
 const typeLabel = (category: ActionQueueCategory) =>
   category === "needs-confirmation"
-    ? "Needs confirmation"
-    : "Requires adviser approval";
+    ? "Address verification"
+    : "Risk profile review";
 
 const priorityLabel = (category: ActionQueueCategory) =>
   category === "requires-adviser-approval" ? "High" : "Standard";
@@ -58,7 +59,7 @@ export const MyActions = ({ review, onOpenReview }: MyActionsProps) => {
             <span className="status-chip">
               Needs confirmation {counts["needs-confirmation"]}
             </span>
-            <span className="status-chip status-chip-warning">
+            <span className="status-chip">
               Requires adviser approval {counts["requires-adviser-approval"]}
             </span>
           </div>
@@ -77,10 +78,10 @@ export const MyActions = ({ review, onOpenReview }: MyActionsProps) => {
                 <th className="border-b border-[var(--border)] px-4 py-2">
                   Action
                 </th>
-                <th className="border-b border-[var(--border)] px-4 py-2">
+                <th className="w-52 border-b border-[var(--border)] px-4 py-2">
                   Type
                 </th>
-                <th className="border-b border-[var(--border)] px-4 py-2">
+                <th className="w-52 border-b border-[var(--border)] px-4 py-2">
                   Status
                 </th>
                 <th className="border-b border-[var(--border)] px-4 py-2">
@@ -92,7 +93,7 @@ export const MyActions = ({ review, onOpenReview }: MyActionsProps) => {
               {actions.length > 0 ? (
                 actions.map((item) => (
                   <tr key={item.actionId} className="align-top">
-                    <td className="whitespace-nowrap px-4 py-3">
+                    <td className="w-52 whitespace-nowrap px-4 py-3">
                       <span
                         className={`status-chip ${
                           item.category === "requires-adviser-approval"
@@ -115,18 +116,10 @@ export const MyActions = ({ review, onOpenReview }: MyActionsProps) => {
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
-                      <span
-                        className={`status-chip ${
-                          item.category === "requires-adviser-approval"
-                            ? "status-chip-warning"
-                            : ""
-                        }`}
-                      >
-                        {typeLabel(item.category)}
-                      </span>
+                      <span className="status-chip">{typeLabel(item.category)}</span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      <span className="status-chip">{item.status}</span>
+                    <td className="w-52 whitespace-nowrap px-4 py-3">
+                      <StatusBadge status={item.status} />
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">
                       <button

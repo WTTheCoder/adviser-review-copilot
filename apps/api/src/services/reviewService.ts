@@ -97,6 +97,7 @@ const unresolvedReviewStatuses = new Set<LifecycleStatus>([
   LifecycleStatus.NEEDS_CONFIRMATION,
   LifecycleStatus.REQUIRES_ADVISER_APPROVAL
 ]);
+const highImpactEscalationTraceLabel = "High-impact changes escalated";
 
 const formatDate = (date: Date) =>
   new Intl.DateTimeFormat("en-AU", {
@@ -645,6 +646,17 @@ export const createReviewService = (
           input.clientId,
           input.candidates
         );
+        const unresolvedReviewItemCount = await transaction.clientFact.count({
+          where: {
+            clientId: input.clientId,
+            lifecycleStatus: {
+              in: [
+                LifecycleStatus.NEEDS_CONFIRMATION,
+                LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+              ]
+            }
+          }
+        });
         await transaction.workflowStep.createMany({
           data: input.workflowSteps.map((step, index) => ({
             id: `${run.id}-step-${index + 1}`,
@@ -652,7 +664,10 @@ export const createReviewService = (
             sequence: index + 1,
             label: step.label,
             status: step.status,
-            detail: step.detail ?? null
+            detail:
+              step.label === highImpactEscalationTraceLabel
+                ? `${unresolvedReviewItemCount} adviser-review items require attention.`
+                : step.detail ?? null
           }))
         });
       })

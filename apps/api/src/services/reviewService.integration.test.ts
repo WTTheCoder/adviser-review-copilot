@@ -1088,6 +1088,14 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
       lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
       candidateSourceRecordId: "source-meeting-note"
     });
+    expect(
+      preparedReview.workflowTrace.find(
+        (step) => step.label === "High-impact changes escalated"
+      )
+    ).toMatchObject({
+      status: WorkflowStepStatus.ESCALATED,
+      detail: "2 adviser-review items require attention."
+    });
 
     const fetchedReview = await service.buildReviewResponse(DEMO_CLIENT_ID);
 
@@ -1097,6 +1105,14 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     expect(fetchedReview.meaningfulChanges).toEqual(
       preparedReview.meaningfulChanges
     );
+    expect(
+      fetchedReview.workflowTrace.find(
+        (step) => step.label === "High-impact changes escalated"
+      )
+    ).toMatchObject({
+      status: WorkflowStepStatus.ESCALATED,
+      detail: "2 adviser-review items require attention."
+    });
   });
 
   it("rolls back the complete reset when the seed transaction fails", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type KeyboardEvent } from "react";
 import type {
   DecisionType,
   DocumentUploadResponse,
@@ -12,6 +12,7 @@ import { EvidenceDrawer } from "./EvidenceDrawer.js";
 import { MeaningfulChanges } from "./MeaningfulChanges.js";
 import { SourceRecordPanel } from "./SourceRecordPanel.js";
 import { SourceUploadPanel } from "./SourceUploadPanel.js";
+import { StatusBadge } from "./StatusBadge.js";
 import { SummaryMetrics } from "./SummaryMetrics.js";
 import { TechnicalDetailsPanel } from "./TechnicalDetailsPanel.js";
 import { selectClientReadySummary } from "../domain/reviewSelectors.js";
@@ -136,6 +137,17 @@ const formatDecision = (decision: string) => decision.replaceAll("_", " ");
 const unresolvedActionCount = (review: ReviewResponse | null) =>
   review?.adviserActions.filter((action) => !action.latestDecision).length ?? 0;
 
+export const initialLoadingIndicatorDelayMs = 200;
+
+export const scheduleInitialLoadingIndicator = (
+  onVisible: () => void,
+  delayMs = initialLoadingIndicatorDelayMs
+) => {
+  const timeout = setTimeout(onVisible, delayMs);
+
+  return () => clearTimeout(timeout);
+};
+
 export const getWorkspaceTabAfterSelection = ({
   activeTab,
   currentSelectedFact,
@@ -155,42 +167,102 @@ type WorkspaceTabsProps = {
   tabPrefix: string;
 };
 
+const workspaceTabIndex = (tab: WorkspaceTab) =>
+  workspaceTabs.findIndex((item) => item.id === tab);
+
+const workspaceTabAt = (index: number): WorkspaceTab =>
+  workspaceTabs[index % workspaceTabs.length]?.id ?? "review";
+
+export const nextWorkspaceTabFromKey = (
+  activeTab: WorkspaceTab,
+  key: string
+): WorkspaceTab | null => {
+  const activeIndex = workspaceTabIndex(activeTab);
+
+  if (activeIndex < 0) {
+    return null;
+  }
+
+  if (key === "Home") {
+    return workspaceTabAt(0);
+  }
+
+  if (key === "End") {
+    return workspaceTabAt(workspaceTabs.length - 1);
+  }
+
+  if (key === "ArrowLeft") {
+    return workspaceTabAt(activeIndex - 1 + workspaceTabs.length);
+  }
+
+  if (key === "ArrowRight") {
+    return workspaceTabAt(activeIndex + 1);
+  }
+
+  return null;
+};
+
 export const WorkspaceTabs = ({
   activeTab,
   onChange,
   tabPrefix
-}: WorkspaceTabsProps) => (
-  <div className="overflow-x-auto border-b border-[var(--border)]">
-    <div
-      className="flex min-w-max gap-1 px-4"
-      role="tablist"
-      aria-label="Client review workspace sections"
-    >
-      {workspaceTabs.map((tab) => {
-        const isActive = activeTab === tab.id;
+}: WorkspaceTabsProps) => {
+  const moveToTab = (tab: WorkspaceTab) => {
+    onChange(tab);
 
-        return (
-          <button
-            aria-controls={`${tabPrefix}-${tab.id}`}
-            aria-selected={isActive}
-            className={`focus-ring border-b-2 px-3 py-3 text-sm font-semibold ${
-              isActive
-                ? "border-[var(--accent)] text-slate-950"
-                : "border-transparent text-[var(--muted)] hover:text-slate-950"
-            }`}
-            id={`${tabPrefix}-${tab.id}-tab`}
-            key={tab.id}
-            role="tab"
-            type="button"
-            onClick={() => onChange(tab.id)}
-          >
-            {tab.label}
-          </button>
-        );
-      })}
+    if (typeof document !== "undefined") {
+      document.getElementById(`${tabPrefix}-${tab}-tab`)?.focus();
+    }
+  };
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    tab: WorkspaceTab
+  ) => {
+    const nextTab = nextWorkspaceTabFromKey(tab, event.key);
+
+    if (!nextTab) {
+      return;
+    }
+
+    event.preventDefault();
+    moveToTab(nextTab);
+  };
+
+  return (
+    <div className="overflow-x-auto border-b border-[var(--border)]">
+      <div
+        className="flex min-w-max gap-1 px-4"
+        role="tablist"
+        aria-label="Client review workspace sections"
+      >
+        {workspaceTabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+
+          return (
+            <button
+              aria-controls={`${tabPrefix}-${tab.id}-panel`}
+              aria-selected={isActive}
+              className={`focus-ring border-b-2 px-3 py-3 text-sm font-semibold ${
+                isActive
+                  ? "border-[var(--accent)] text-slate-950"
+                  : "border-transparent text-[var(--muted)] hover:text-slate-950"
+              }`}
+              id={`${tabPrefix}-${tab.id}-tab`}
+              key={tab.id}
+              role="tab"
+              tabIndex={isActive ? 0 : -1}
+              type="button"
+              onClick={() => onChange(tab.id)}
+              onKeyDown={(event) => handleKeyDown(event, tab.id)}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const EmptyReviewPanel = () => (
   <div className="rounded border border-dashed border-slate-300 bg-white p-6 text-center">
@@ -200,6 +272,18 @@ const EmptyReviewPanel = () => (
     <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
       Prepare the review to see current facts, meaningful changes, and adviser
       actions for this client.
+    </p>
+  </div>
+);
+
+const ReviewLoadingPanel = () => (
+  <div
+    aria-live="polite"
+    className="rounded border border-slate-200 bg-slate-50 p-5"
+  >
+    <p className="text-sm font-semibold text-slate-900">Loading review data</p>
+    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+      Retrieving the current client review and available source material.
     </p>
   </div>
 );
@@ -342,13 +426,13 @@ const ClientSummaryPanel = ({ review }: { review: ReviewResponse }) => {
           <div className="divide-y divide-[var(--border)]">
             {summary.currentClientPicture.map((fact) => (
               <div
-                className="grid gap-2 px-4 py-3 md:grid-cols-[180px_minmax(0,1fr)_130px]"
+                className="grid gap-2 px-4 py-3 md:grid-cols-[180px_minmax(0,1fr)_180px]"
                 key={fact.factId}
               >
                 <div className="font-semibold text-slate-950">{fact.field}</div>
                 <div className="text-slate-700">{fact.value}</div>
-                <span className="status-chip justify-self-start">
-                  {fact.status}
+                <span className="justify-self-start">
+                  <StatusBadge status={fact.status} />
                 </span>
               </div>
             ))}
@@ -473,12 +557,32 @@ export const ClientReviewWorkspace = ({
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(() =>
     readInitialWorkspaceTab(initialTab)
   );
+  const [showInitialLoading, setShowInitialLoading] = useState(false);
   const tabPrefix = useId();
+  const isInitialReviewLoading = isLoading && reviewData === null;
+  const shouldShowInitialLoading = isInitialReviewLoading && showInitialLoading;
   const openActions = unresolvedActionCount(reviewData);
+  const headerClientName = reviewData?.client.name ?? "Alex Taylor";
+  const headerReviewLabel = reviewData
+    ? `${reviewData.client.reviewYear} Client Review`
+    : "2026 Client Review";
+  const headerAdviserLabel = `Adviser: ${
+    reviewData?.client.adviserName ?? "Jordan Lee"
+  }`;
   const changeActiveTab = (tab: WorkspaceTab) => {
     setActiveTab(tab);
     persistWorkspaceTab(tab);
   };
+
+  useEffect(() => {
+    if (!isInitialReviewLoading) {
+      setShowInitialLoading(false);
+      return;
+    }
+
+    setShowInitialLoading(false);
+    return scheduleInitialLoadingIndicator(() => setShowInitialLoading(true));
+  }, [isInitialReviewLoading]);
 
   useEffect(() => {
     setActiveTab((currentTab) => {
@@ -502,33 +606,70 @@ export const ClientReviewWorkspace = ({
       <section className="border-b border-[var(--border)] bg-white">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-5 py-4 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-950">
-                {reviewData?.client.name ?? "Alex Taylor"}
-              </h1>
-              <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-700">
-                <span className="status-chip">
-                  {reviewData
-                    ? `${reviewData.client.reviewYear} Client Review`
-                    : "2026 Client Review"}
-                </span>
-                <span className="status-chip">
-                  Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
-                </span>
-                <span className="status-chip status-chip-warning">
-                  {reviewStatus}
-                </span>
-                <span className="status-chip">{openActions} open actions</span>
-              </div>
-            </div>
-            <button
-              className="primary-action focus-ring self-start"
-              disabled={isPreparing || isLoading || isResetting}
-              type="button"
-              onClick={onPrepareReview}
-            >
-              {prepareButtonLabel}
-            </button>
+            {isInitialReviewLoading ? (
+              <>
+                <div aria-busy="true" aria-live="polite">
+                  <h1
+                    aria-label="Client review loading"
+                    className="text-2xl font-semibold text-slate-950"
+                  >
+                    {shouldShowInitialLoading ? (
+                      "Loading review"
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="block h-8 w-48 rounded bg-slate-100 opacity-0"
+                      />
+                    )}
+                  </h1>
+                  {shouldShowInitialLoading ? (
+                    <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-700">
+                      <span className="status-chip status-chip-loading">
+                        Loading review data
+                      </span>
+                    </div>
+                  ) : (
+                    <div
+                      aria-hidden="true"
+                      className="mt-3 flex flex-wrap gap-2"
+                    >
+                      <span className="block h-5 w-32 rounded bg-slate-100 opacity-0" />
+                      <span className="block h-5 w-28 rounded bg-slate-100 opacity-0" />
+                    </div>
+                  )}
+                </div>
+                <button
+                  aria-label="Review data is loading"
+                  className="primary-action focus-ring self-start"
+                  disabled
+                  type="button"
+                >
+                  {shouldShowInitialLoading ? "Loading" : ""}
+                </button>
+              </>
+            ) : (
+              <>
+                <div>
+                  <h1 className="text-2xl font-semibold text-slate-950">
+                    {headerClientName}
+                  </h1>
+                  <div className="mt-3 flex flex-wrap gap-2 text-sm text-slate-700">
+                    <span className="status-chip">{headerReviewLabel}</span>
+                    <span className="status-chip">{headerAdviserLabel}</span>
+                    <StatusBadge status={reviewStatus} />
+                    <span className="status-chip">{openActions} open actions</span>
+                  </div>
+                </div>
+                <button
+                  className="primary-action focus-ring self-start"
+                  disabled={isPreparing || isLoading || isResetting}
+                  type="button"
+                  onClick={onPrepareReview}
+                >
+                  {prepareButtonLabel}
+                </button>
+              </>
+            )}
           </div>
 
         {loadError ? (
@@ -543,16 +684,7 @@ export const ClientReviewWorkspace = ({
           </div>
         ) : null}
 
-        {isLoading ? (
-          <div className="rounded border border-slate-200 bg-slate-50 p-5">
-            <p className="text-sm font-semibold text-slate-900">
-              Loading review data
-            </p>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Retrieving the current client review and available source material.
-            </p>
-          </div>
-        ) : null}
+        {shouldShowInitialLoading ? <ReviewLoadingPanel /> : null}
 
         {reviewData && !isPrepared ? (
           <div className="rounded border border-slate-200 bg-slate-50 p-4">
@@ -575,9 +707,10 @@ export const ClientReviewWorkspace = ({
 
     <section className="mx-auto w-full max-w-7xl px-5 py-5 lg:px-8">
       <div
-        id={`${tabPrefix}-${activeTab}`}
+        aria-labelledby={`${tabPrefix}-review-tab`}
+        hidden={activeTab !== "review"}
+        id={`${tabPrefix}-review-panel`}
         role="tabpanel"
-        aria-labelledby={`${tabPrefix}-${activeTab}-tab`}
       >
         {activeTab === "review" ? (
           <div className="space-y-5">
@@ -599,12 +732,21 @@ export const ClientReviewWorkspace = ({
                   />
                 </div>
               </>
+            ) : isInitialReviewLoading ? (
+              null
             ) : (
               <EmptyReviewPanel />
             )}
           </div>
         ) : null}
+      </div>
 
+      <div
+        aria-labelledby={`${tabPrefix}-evidence-tab`}
+        hidden={activeTab !== "evidence"}
+        id={`${tabPrefix}-evidence-panel`}
+        role="tabpanel"
+      >
         {activeTab === "evidence" ? (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
             <SourceUploadPanel
@@ -616,7 +758,14 @@ export const ClientReviewWorkspace = ({
             <SourceRecordPanel records={reviewData?.sourceRecords ?? []} />
           </div>
         ) : null}
+      </div>
 
+      <div
+        aria-labelledby={`${tabPrefix}-history-tab`}
+        hidden={activeTab !== "history"}
+        id={`${tabPrefix}-history-panel`}
+        role="tabpanel"
+      >
         {activeTab === "history" ? (
           <section className="enterprise-panel">
             <div className="panel-heading">
@@ -630,7 +779,14 @@ export const ClientReviewWorkspace = ({
             {reviewData ? <DecisionHistoryTable review={reviewData} /> : null}
           </section>
         ) : null}
+      </div>
 
+      <div
+        aria-labelledby={`${tabPrefix}-summary-tab`}
+        hidden={activeTab !== "summary"}
+        id={`${tabPrefix}-summary-panel`}
+        role="tabpanel"
+      >
         {activeTab === "summary" && reviewData ? (
           <ClientSummaryPanel review={reviewData} />
         ) : null}

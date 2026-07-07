@@ -7,6 +7,7 @@ import {
   getReviewStatusLabel,
   hasPreparedReviewWorkspaceData
 } from "../domain/reviewWorkflow.js";
+import { StatusBadge } from "./StatusBadge.js";
 
 type AdviserDashboardProps = {
   review: ReviewResponse;
@@ -17,8 +18,8 @@ const formatDecision = (decision: string) => decision.replaceAll("_", " ");
 
 const typeLabel = (category: DashboardAttentionItem["category"]) =>
   category === "needs-confirmation"
-    ? "Needs confirmation"
-    : "Requires adviser approval";
+    ? "Address verification"
+    : "Risk profile review";
 
 export const AdviserDashboard = ({
   review,
@@ -110,19 +111,11 @@ export const AdviserDashboard = ({
               {dashboard.itemsRequiringAttention.length > 0 ? (
                 dashboard.itemsRequiringAttention.map((item) => (
                   <div
-                    className="grid gap-3 px-4 py-3 lg:grid-cols-[130px_minmax(0,1fr)_110px] lg:items-center"
+                    className="grid gap-3 px-4 py-3 lg:grid-cols-[190px_minmax(0,1fr)_110px] lg:items-center"
                     key={item.actionId}
                   >
                     <div>
-                      <span
-                        className={`status-chip ${
-                          item.category === "requires-adviser-approval"
-                            ? "status-chip-warning"
-                            : ""
-                        }`}
-                      >
-                        {typeLabel(item.category)}
-                      </span>
+                      <span className="status-chip">{typeLabel(item.category)}</span>
                     </div>
                     <div className="min-w-0">
                       <h3 className="text-sm font-semibold text-slate-950">
@@ -233,9 +226,7 @@ export const AdviserDashboard = ({
               <div>
                 <dt className="font-semibold text-[var(--muted)]">Status</dt>
                 <dd className="mt-1">
-                  <span className="status-chip status-chip-warning">
-                    {reviewStatus}
-                  </span>
+                  <StatusBadge status={reviewStatus} />
                 </dd>
               </div>
             </dl>
