@@ -13,8 +13,12 @@ type AdviserNavigationProps = {
 const navigationItems: readonly NavigationItem[] = [
   { id: "dashboard", label: "Overview" },
   { id: "my-actions", label: "My Actions" },
-  { id: "client-review", label: "Client Review" }
+  { id: "client-reviews", label: "Client Reviews" }
 ];
+
+const isNavigationItemActive = (activeView: AdviserView, itemId: AdviserView) =>
+  activeView === itemId ||
+  (itemId === "client-reviews" && activeView === "client-review");
 
 export const AdviserNavigation = ({
   activeView,
@@ -36,7 +40,7 @@ export const AdviserNavigation = ({
       <nav className="mt-4 lg:mt-8" aria-label="Primary adviser views">
         <div className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
           {navigationItems.map((item) => {
-            const isActive = activeView === item.id;
+            const isActive = isNavigationItemActive(activeView, item.id);
 
             return (
               <button
@@ -60,7 +64,7 @@ export const AdviserNavigation = ({
         </div>
       </nav>
       <div className="mt-auto hidden border-t border-white/10 pt-4 text-xs text-[var(--sidebar-muted)] lg:block">
-        <div className="font-semibold text-white">Jordan Lee</div>
+        <div className="font-semibold text-white">Jordan Bennett</div>
         <div className="mt-1">Adviser review queue</div>
       </div>
     </div>

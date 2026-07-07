@@ -13,6 +13,7 @@ import { AdviserDashboard } from "./components/AdviserDashboard.js";
 import { AdviserNavigation } from "./components/AdviserNavigation.js";
 import { type ApiStatus } from "./components/ApiStatusBadge.js";
 import { ClientReviewWorkspace } from "./components/ClientReviewWorkspace.js";
+import { ClientReviewsList } from "./components/ClientReviewsList.js";
 import { MyActions } from "./components/MyActions.js";
 import {
   clearUploadTrace,
@@ -125,6 +126,7 @@ export type AdviserAppContentProps = {
   workspaceState: ClientReviewWorkspaceState;
   onCloseEvidence: () => void;
   onDecision: (factId: string, decision: DecisionType) => void;
+  onOpenClientReviews: () => void;
   onOpenReview: (factId?: string) => void;
   onPrepareReview: () => void;
   onResetDemo: () => void;
@@ -152,6 +154,7 @@ export const AdviserAppContent = ({
   workspaceState,
   onCloseEvidence,
   onDecision,
+  onOpenClientReviews,
   onOpenReview,
   onPrepareReview,
   onResetDemo,
@@ -170,7 +173,11 @@ export const AdviserAppContent = ({
     {reviewData && activeView === "my-actions" ? (
       <MyActions review={reviewData} onOpenReview={onOpenReview} />
     ) : null}
-    {activeView === "client-review" || !reviewData ? (
+    {activeView === "client-reviews" ? (
+      <ClientReviewsList onOpenAlexReview={() => onOpenReview()} />
+    ) : null}
+    {activeView === "client-review" ||
+    (!reviewData && activeView !== "client-reviews") ? (
       <ClientReviewWorkspace
         apiBaseUrl={apiBaseUrl}
         apiStatus={apiStatus}
@@ -194,6 +201,7 @@ export const AdviserAppContent = ({
         uploadPanelResetToken={uploadPanelResetToken}
         onCloseEvidence={onCloseEvidence}
         onDecision={onDecision}
+        onBackToClientReviews={onOpenClientReviews}
         onPrepareReview={onPrepareReview}
         onResetDemo={onResetDemo}
         onSelectFact={onSelectFact}
@@ -536,6 +544,10 @@ export const App = () => {
     changeActiveView(nextState.activeView);
     setSelectedFact(nextState.selectedFact);
   };
+  const openClientReviews = () => {
+    changeActiveView("client-reviews");
+    setSelectedFact(null);
+  };
 
   const isLoading = !reviewData && !loadError;
   const workspaceState = getClientReviewWorkspaceState({
@@ -581,6 +593,7 @@ export const App = () => {
       workspaceState={workspaceState}
       onCloseEvidence={() => setSelectedFact(null)}
       onDecision={handleDecision}
+      onOpenClientReviews={openClientReviews}
       onOpenReview={openClientReview}
       onPrepareReview={handlePrepareReview}
       onResetDemo={handleResetDemo}

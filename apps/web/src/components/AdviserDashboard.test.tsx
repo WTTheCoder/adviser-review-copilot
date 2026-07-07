@@ -31,7 +31,7 @@ const review = (resolved = false): ReviewResponse => ({
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Ready for adviser review"
   },

@@ -98,7 +98,7 @@ const createReview = (
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Ready for adviser review"
   },
@@ -138,7 +138,7 @@ describe("review selectors", () => {
     expect(dashboard.currentReview).toEqual({
       clientId: "demo-alex-taylor",
       clientName: "Alex Taylor",
-      adviserName: "Jordan Lee",
+      adviserName: "Jordan Bennett",
       reviewYear: 2026,
       reviewStatus: "Ready for adviser review"
     });

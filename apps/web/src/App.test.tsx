@@ -1,4 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import {
+  Children,
+  isValidElement,
+  type ReactElement,
+  type ReactNode
+} from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewResponse } from "@client-review-prep/shared";
 import {
@@ -7,14 +13,45 @@ import {
   getInitialAdviserView,
   getResetClientReviewState
 } from "./App.js";
+import { AdviserDashboard } from "./components/AdviserDashboard.js";
+import { ClientReviewWorkspace } from "./components/ClientReviewWorkspace.js";
+import { ClientReviewsList } from "./components/ClientReviewsList.js";
+import { MyActions } from "./components/MyActions.js";
 import { selectActionQueue, selectDashboardSummary } from "./domain/reviewSelectors.js";
 import type { AdviserView } from "./domain/adviserViews.js";
+
+type InspectableProps = Record<string, unknown> & {
+  children?: ReactNode;
+};
+type InspectableElement = ReactElement<InspectableProps>;
+
+const findComponent = (
+  node: ReactNode,
+  type: unknown
+): InspectableElement | null => {
+  if (!isValidElement<InspectableProps>(node)) {
+    return null;
+  }
+
+  if (node.type === type) {
+    return node;
+  }
+
+  for (const child of Children.toArray(node.props.children)) {
+    const match = findComponent(child, type);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+};
 
 const resetReview: ReviewResponse = {
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Preparation in progress"
   },
@@ -215,6 +252,7 @@ const renderContent = (activeView: AdviserView, review = resetReview) => {
       workspaceState={workspaceState}
       onCloseEvidence={() => undefined}
       onDecision={() => undefined}
+      onOpenClientReviews={() => undefined}
       onOpenReview={() => undefined}
       onPrepareReview={() => undefined}
       onResetDemo={() => undefined}
@@ -229,8 +267,125 @@ describe("App reset and view orchestration", () => {
   it("restores the initial view from supported hashes", () => {
     expect(getInitialAdviserView("#overview")).toBe("dashboard");
     expect(getInitialAdviserView("#my-actions")).toBe("my-actions");
+    expect(getInitialAdviserView("#client-reviews")).toBe("client-reviews");
     expect(getInitialAdviserView("#client-review")).toBe("client-review");
     expect(getInitialAdviserView("#invalid")).toBe("dashboard");
+  });
+
+  it("renders Client Reviews as the list page and Client Review as Alex detail", () => {
+    const listMarkup = renderContent("client-reviews", preparedReview);
+    const detailMarkup = renderContent("client-review", preparedReview);
+
+    expect(listMarkup).toContain("Client Reviews");
+    expect(listMarkup).toContain("Manage active annual reviews");
+    expect(listMarkup).toContain("Emma Wilson");
+    expect(listMarkup).toContain("Open review");
+    expect(listMarkup).not.toContain("Current client picture");
+    expect(detailMarkup).toContain("Back to client reviews");
+    expect(detailMarkup).toContain("Current client picture");
+  });
+
+  it("opens Alex detail from the Client Reviews list and returns to the list", () => {
+    let activeView: AdviserView = "client-reviews";
+    const workspaceState = getClientReviewWorkspaceState({
+      reviewData: preparedReview,
+      reviewPhase: "prepared",
+      selectedFact: null
+    });
+    const renderTree = () =>
+      AdviserAppContent({
+        activeView,
+        apiBaseUrl: "http://localhost:3001",
+        apiStatus: "connected",
+        clientId: preparedReview.client.id,
+        extractionLabel: null,
+        extractionWarning: null,
+        isLoading: false,
+        isResetting: false,
+        latestUploadTrace: null,
+        loadError: null,
+        noticeMessage: null,
+        reviewData: preparedReview,
+        savingFactId: null,
+        skillLabel: "Selected skill: prepare-annual-review",
+        uploadPanelResetToken: 1,
+        workspaceState,
+        onCloseEvidence: () => undefined,
+        onDecision: () => undefined,
+        onOpenClientReviews: () => {
+          activeView = "client-reviews";
+        },
+        onOpenReview: () => {
+          activeView = "client-review";
+        },
+        onPrepareReview: () => undefined,
+        onResetDemo: () => undefined,
+        onSelectFact: () => undefined,
+        onUploaded: () => undefined,
+        onViewChange: (view) => {
+          activeView = view;
+        }
+      });
+
+    const list = findComponent(renderTree(), ClientReviewsList);
+    (list?.props.onOpenAlexReview as () => void)();
+    expect(activeView).toBe("client-review");
+
+    const workspace = findComponent(renderTree(), ClientReviewWorkspace);
+    (workspace?.props.onBackToClientReviews as () => void)();
+    expect(activeView).toBe("client-reviews");
+  });
+
+  it("keeps Overview and My Actions direct actions aimed at Alex detail", () => {
+    let activeView: AdviserView = "dashboard";
+    const workspaceState = getClientReviewWorkspaceState({
+      reviewData: preparedReview,
+      reviewPhase: "prepared",
+      selectedFact: null
+    });
+    const renderTree = () =>
+      AdviserAppContent({
+        activeView,
+        apiBaseUrl: "http://localhost:3001",
+        apiStatus: "connected",
+        clientId: preparedReview.client.id,
+        extractionLabel: null,
+        extractionWarning: null,
+        isLoading: false,
+        isResetting: false,
+        latestUploadTrace: null,
+        loadError: null,
+        noticeMessage: null,
+        reviewData: preparedReview,
+        savingFactId: null,
+        skillLabel: "Selected skill: prepare-annual-review",
+        uploadPanelResetToken: 1,
+        workspaceState,
+        onCloseEvidence: () => undefined,
+        onDecision: () => undefined,
+        onOpenClientReviews: () => {
+          activeView = "client-reviews";
+        },
+        onOpenReview: () => {
+          activeView = "client-review";
+        },
+        onPrepareReview: () => undefined,
+        onResetDemo: () => undefined,
+        onSelectFact: () => undefined,
+        onUploaded: () => undefined,
+        onViewChange: (view) => {
+          activeView = view;
+        }
+      });
+
+    const dashboard = findComponent(renderTree(), AdviserDashboard);
+    (dashboard?.props.onOpenReview as () => void)();
+    expect(activeView).toBe("client-review");
+
+    activeView = "my-actions";
+    const actions = findComponent(renderTree(), MyActions);
+    (actions?.props.onOpenReview as () => void)();
+    expect(activeView).toBe("client-review");
   });
 
   it("renders refreshed prepared review data across primary views after preparation", () => {
@@ -346,6 +501,7 @@ describe("App reset and view orchestration", () => {
         workspaceState={workspaceState}
         onCloseEvidence={() => undefined}
         onDecision={() => undefined}
+        onOpenClientReviews={() => undefined}
         onOpenReview={() => undefined}
         onPrepareReview={onPrepareReview}
         onResetDemo={() => undefined}

@@ -46,6 +46,7 @@ export type ClientReviewWorkspaceProps = {
   initialTab?: WorkspaceTab;
   onCloseEvidence: () => void;
   onDecision: (factId: string, decision: DecisionType) => void;
+  onBackToClientReviews?: () => void;
   onPrepareReview: () => void;
   onResetDemo: () => void;
   onSelectFact: (fact: ClientFact) => void;
@@ -549,6 +550,7 @@ export const ClientReviewWorkspace = ({
   initialTab,
   onCloseEvidence,
   onDecision,
+  onBackToClientReviews,
   onPrepareReview,
   onResetDemo,
   onSelectFact,
@@ -567,7 +569,7 @@ export const ClientReviewWorkspace = ({
     ? `${reviewData.client.reviewYear} Client Review`
     : "2026 Client Review";
   const headerAdviserLabel = `Adviser: ${
-    reviewData?.client.adviserName ?? "Jordan Lee"
+    reviewData?.client.adviserName ?? "Jordan Bennett"
   }`;
   const changeActiveTab = (tab: WorkspaceTab) => {
     setActiveTab(tab);
@@ -650,6 +652,15 @@ export const ClientReviewWorkspace = ({
             ) : (
               <>
                 <div>
+                  {onBackToClientReviews ? (
+                    <button
+                      className="link-action focus-ring mb-2"
+                      type="button"
+                      onClick={onBackToClientReviews}
+                    >
+                      Back to client reviews
+                    </button>
+                  ) : null}
                   <h1 className="text-2xl font-semibold text-slate-950">
                     {headerClientName}
                   </h1>

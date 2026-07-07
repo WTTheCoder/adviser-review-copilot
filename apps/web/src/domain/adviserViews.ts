@@ -1,12 +1,18 @@
 import type { ClientReviewData, ClientFact } from "../types/demo.js";
 
-export const adviserViews = ["dashboard", "my-actions", "client-review"] as const;
+export const adviserViews = [
+  "dashboard",
+  "my-actions",
+  "client-reviews",
+  "client-review"
+] as const;
 
 export type AdviserView = (typeof adviserViews)[number];
 
 const viewHashes: Record<AdviserView, string> = {
   dashboard: "#overview",
   "my-actions": "#my-actions",
+  "client-reviews": "#client-reviews",
   "client-review": "#client-review"
 };
 

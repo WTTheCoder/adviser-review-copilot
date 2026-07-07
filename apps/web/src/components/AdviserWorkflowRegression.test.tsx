@@ -56,7 +56,7 @@ const preparedReview: ReviewResponse = {
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Preparation in progress"
   },
@@ -185,6 +185,10 @@ describe("adviser action navigation regression", () => {
               selectedFact = null;
             }}
             onDecision={() => undefined}
+            onOpenClientReviews={() => {
+              activeView = "client-reviews";
+              selectedFact = null;
+            }}
             onOpenReview={(factId) => {
               const nextState = openClientReviewState(preparedReview, factId);
               activeView = nextState.activeView;

@@ -4,7 +4,11 @@ const statusStyles: Record<string, string> = {
   "Needs confirmation": "status-chip-warning",
   "Requires adviser approval": "status-chip-info",
   "Ready for adviser review": "status-chip-success",
-  "Ready to prepare": "status-chip-loading"
+  "Ready to prepare": "status-chip-loading",
+  "Preparing review": "status-chip-loading",
+  "Ready for client meeting": "status-chip-success",
+  "Review completed": "status-chip-success",
+  "Awaiting source documents": "status-chip-warning"
 };
 
 type StatusBadgeProps = {

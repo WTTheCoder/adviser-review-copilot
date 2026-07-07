@@ -82,7 +82,7 @@ const review: ReviewResponse = {
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Ready for adviser review"
   },
@@ -277,7 +277,7 @@ describe("ClientReviewWorkspace", () => {
 
     expect(markup).toContain("Alex Taylor");
     expect(markup).toContain("2026 Client Review");
-    expect(markup).toContain("Adviser: Jordan Lee");
+    expect(markup).toContain("Adviser: Jordan Bennett");
     expect(markup).toContain("2 open actions");
     expect(markup).toContain("Review");
     expect(markup).toContain("Evidence &amp; Sources");

@@ -64,12 +64,14 @@ describe("adviser view state", () => {
   it("maps adviser views to stable URL hashes", () => {
     expect(hashForAdviserView("dashboard")).toBe("#overview");
     expect(hashForAdviserView("my-actions")).toBe("#my-actions");
+    expect(hashForAdviserView("client-reviews")).toBe("#client-reviews");
     expect(hashForAdviserView("client-review")).toBe("#client-review");
   });
 
   it("restores adviser views from hashes with Overview fallback", () => {
     expect(adviserViewFromHash("#overview")).toBe("dashboard");
     expect(adviserViewFromHash("#my-actions")).toBe("my-actions");
+    expect(adviserViewFromHash("#client-reviews")).toBe("client-reviews");
     expect(adviserViewFromHash("#client-review")).toBe("client-review");
     expect(adviserViewFromHash("#unknown")).toBe("dashboard");
     expect(adviserViewFromHash("")).toBe("dashboard");
@@ -79,5 +81,8 @@ describe("adviser view state", () => {
     expect(canonicalHashForAdviserHash("#invalid")).toBe("#overview");
     expect(canonicalHashForAdviserHash("")).toBe("#overview");
     expect(canonicalHashForAdviserHash("#my-actions")).toBe("#my-actions");
+    expect(canonicalHashForAdviserHash("#client-reviews")).toBe(
+      "#client-reviews"
+    );
   });
 });
