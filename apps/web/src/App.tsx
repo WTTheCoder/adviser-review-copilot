@@ -30,6 +30,9 @@ import {
 import { createDecisionSubmissionLock } from "./domain/decisionSubmissionLock.js";
 import { createClientOperationGeneration } from "./domain/clientOperationGeneration.js";
 import {
+  adviserViewFromHash,
+  canonicalHashForAdviserHash,
+  hashForAdviserView,
   openClientReviewState,
   type AdviserView
 } from "./domain/adviserViews.js";
@@ -45,6 +48,27 @@ export type ClientReviewWorkspaceState = {
   reviewStatus: string;
   selectedFactAction: ReviewResponse["adviserActions"][number] | null;
 };
+
+export type ResetClientReviewState = {
+  activeView: AdviserView;
+  reviewData: ReviewResponse;
+  reviewPhase: ReviewPhase;
+  selectedFact: ClientFact | null;
+};
+
+export const getInitialAdviserView = (
+  hash = typeof window === "undefined" ? "" : window.location.hash
+): AdviserView => adviserViewFromHash(hash);
+
+export const getResetClientReviewState = (
+  resetReview: ReviewResponse,
+  activeView: AdviserView
+): ResetClientReviewState => ({
+  activeView,
+  reviewData: resetReview,
+  reviewPhase: "ready",
+  selectedFact: null
+});
 
 export const getClientReviewWorkspaceState = ({
   reviewData,
@@ -77,11 +101,7 @@ export const getClientReviewWorkspaceState = ({
     isPrepared: displayReviewPhase === "prepared",
     isPreparing: displayReviewPhase === "preparing",
     prepareButtonLabel: getPrepareButtonLabel(displayReviewPhase),
-    reviewStatus:
-      displayReviewPhase === "preparing"
-        ? getReviewStatusLabel(displayReviewPhase)
-        : reviewData?.client.reviewStatus ??
-          getReviewStatusLabel(displayReviewPhase),
+    reviewStatus: getReviewStatusLabel(displayReviewPhase),
     selectedFactAction
   };
 };
@@ -187,7 +207,8 @@ export const App = () => {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
   const [reviewData, setReviewData] = useState<ReviewResponse | null>(null);
   const [reviewPhase, setReviewPhase] = useState<ReviewPhase>("ready");
-  const [activeView, setActiveView] = useState<AdviserView>("dashboard");
+  const [activeView, setActiveView] =
+    useState<AdviserView>(getInitialAdviserView);
   const [selectedFact, setSelectedFact] = useState<ClientFact | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
@@ -237,6 +258,35 @@ export const App = () => {
       controller.abort();
     };
   }, [apiBaseUrl]);
+
+  useEffect(() => {
+    const syncViewFromHash = () => {
+      const nextView = adviserViewFromHash(window.location.hash);
+      const canonicalHash = canonicalHashForAdviserHash(window.location.hash);
+
+      setActiveView(nextView);
+
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(null, "", canonicalHash);
+      }
+    };
+
+    syncViewFromHash();
+    window.addEventListener("hashchange", syncViewFromHash);
+
+    return () => {
+      window.removeEventListener("hashchange", syncViewFromHash);
+    };
+  }, []);
+
+  const changeActiveView = (view: AdviserView) => {
+    setActiveView(view);
+    const nextHash = hashForAdviserView(view);
+
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", nextHash);
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -447,9 +497,11 @@ export const App = () => {
 
       const resetReview = reviewResponseSchema.parse(await response.json());
       clientOperationGeneration.current.applyIfCurrent(resetGeneration, () => {
-        setReviewData(resetReview);
-        setReviewPhase("ready");
-        setSelectedFact(null);
+        const resetState = getResetClientReviewState(resetReview, activeView);
+        setReviewData(resetState.reviewData);
+        setReviewPhase(resetState.reviewPhase);
+        setSelectedFact(resetState.selectedFact);
+        setActiveView(resetState.activeView);
         setLatestUploadTrace(clearUploadTrace());
         setNoticeMessage(null);
       });
@@ -481,7 +533,7 @@ export const App = () => {
 
   const openClientReview = (factId?: string) => {
     const nextState = openClientReviewState(reviewData, factId);
-    setActiveView(nextState.activeView);
+    changeActiveView(nextState.activeView);
     setSelectedFact(nextState.selectedFact);
   };
 
@@ -534,7 +586,7 @@ export const App = () => {
       onResetDemo={handleResetDemo}
       onSelectFact={setSelectedFact}
       onUploaded={handleUploadedSource}
-      onViewChange={setActiveView}
+      onViewChange={changeActiveView}
     />
   );
 };

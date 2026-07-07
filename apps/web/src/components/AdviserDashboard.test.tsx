@@ -136,6 +136,23 @@ const review = (resolved = false): ReviewResponse => ({
   workflowTrace: []
 });
 
+const unpreparedReview = (): ReviewResponse => ({
+  ...review(),
+  client: {
+    ...review().client,
+    reviewStatus: "Preparation in progress"
+  },
+  summaryMetrics: [
+    { value: "6", label: "Facts reviewed" },
+    { value: "0", label: "Meaningful changes" },
+    { value: "0", label: "Items needing confirmation" }
+  ],
+  clientFacts: [],
+  meaningfulChanges: [],
+  adviserActions: [],
+  workflowTrace: []
+});
+
 const textContent = (node: ReactNode): string =>
   Children.toArray(node)
     .map((child) => {
@@ -184,6 +201,28 @@ describe("AdviserDashboard", () => {
     expect(markup).toContain("Meaningful changes");
     expect(markup).toContain("High-impact changes");
     expect(markup).toContain("Recent adviser decisions");
+  });
+
+  it("shows ready-to-prepare status and 0 facts reviewed before preparation", () => {
+    const markup = renderToStaticMarkup(
+      <AdviserDashboard
+        review={unpreparedReview()}
+        onOpenReview={() => undefined}
+      />
+    );
+
+    expect(markup).toContain("Ready to prepare");
+    expect(markup).not.toContain("Preparation in progress");
+    expect(markup).toContain("<div class=\"mt-1 text-lg font-semibold text-slate-950\">0</div>");
+  });
+
+  it("shows the prepared fact count once workspace data exists", () => {
+    const markup = renderToStaticMarkup(
+      <AdviserDashboard review={review()} onOpenReview={() => undefined} />
+    );
+
+    expect(markup).toContain("<div class=\"mt-1 text-lg font-semibold text-slate-950\">8</div>");
+    expect(markup).toContain("Ready for adviser review");
   });
 
   it("uses honest empty states when actions and decisions are resolved or absent", () => {

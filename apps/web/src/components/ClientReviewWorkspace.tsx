@@ -4,15 +4,15 @@ import type {
   ReviewResponse
 } from "@client-review-prep/shared";
 import { AdviserActions } from "./AdviserActions.js";
-import { ApiStatusBadge, type ApiStatus } from "./ApiStatusBadge.js";
+import { type ApiStatus } from "./ApiStatusBadge.js";
 import { CurrentClientPicture } from "./CurrentClientPicture.js";
+import { DemoControlsPanel } from "./DemoControlsPanel.js";
 import { EvidenceDrawer } from "./EvidenceDrawer.js";
-import { ExecutionTrace } from "./ExecutionTrace.js";
 import { MeaningfulChanges } from "./MeaningfulChanges.js";
 import { SourceRecordPanel } from "./SourceRecordPanel.js";
 import { SourceUploadPanel } from "./SourceUploadPanel.js";
 import { SummaryMetrics } from "./SummaryMetrics.js";
-import { UploadExecutionTrace } from "./UploadExecutionTrace.js";
+import { TechnicalDetailsPanel } from "./TechnicalDetailsPanel.js";
 import type {
   AdviserAction,
   ClientFact,
@@ -100,12 +100,11 @@ export const ClientReviewWorkspace = ({
                 Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
               </span>
               <span className="rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-amber-800">
-                {reviewData?.client.reviewStatus ?? reviewStatus}
+                {reviewStatus}
               </span>
             </div>
           </div>
           <div className="flex flex-col items-start gap-3 lg:items-end">
-            <ApiStatusBadge status={apiStatus} />
             <button
               className="rounded bg-cyan-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-700 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-400"
               disabled={isPreparing || isLoading || isResetting}
@@ -113,14 +112,6 @@ export const ClientReviewWorkspace = ({
               onClick={onPrepareReview}
             >
               {prepareButtonLabel}
-            </button>
-            <button
-              className="text-xs font-semibold text-slate-500 underline-offset-4 hover:text-slate-800 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
-              disabled={isResetting || isLoading}
-              type="button"
-              onClick={onResetDemo}
-            >
-              {isResetting ? "Resetting local demo..." : "Reset local demo data"}
             </button>
           </div>
         </div>
@@ -143,7 +134,7 @@ export const ClientReviewWorkspace = ({
               Loading review data
             </p>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Connecting to the review API and local PostgreSQL-backed demo data.
+              Retrieving the current client review and available source material.
             </p>
           </div>
         ) : null}
@@ -152,26 +143,15 @@ export const ClientReviewWorkspace = ({
           <div className="rounded border border-slate-200 bg-slate-50 p-5">
             <p className="text-sm font-semibold text-slate-900">Ready to prepare</p>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              Three fictional source records are loaded from the database. Start
-              the preparation run to reconcile current facts, preserve superseded
-              history, and surface the items that need adviser confirmation.
+              Source material is available for this review. Start preparation to
+              reconcile current facts, preserve superseded history, and surface
+              items that need adviser attention.
             </p>
           </div>
         ) : null}
 
         {reviewData && isPrepared ? (
-          <>
-            <div className="text-xs font-semibold text-slate-500">
-              {skillLabel}
-              {extractionLabel ? (
-                <span className="ml-3 text-slate-400">{extractionLabel}</span>
-              ) : null}
-              {extractionWarning ? (
-                <span className="ml-3 text-amber-700">{extractionWarning}</span>
-              ) : null}
-            </div>
-            <SummaryMetrics metrics={reviewData.summaryMetrics} />
-          </>
+          <SummaryMetrics metrics={reviewData.summaryMetrics} />
         ) : null}
       </div>
     </section>
@@ -194,7 +174,6 @@ export const ClientReviewWorkspace = ({
                 onDecision={onDecision}
               />
             </div>
-            <ExecutionTrace items={reviewData.workflowTrace} />
           </>
         ) : (
           <div className="rounded border border-dashed border-slate-300 bg-white p-8 text-center">
@@ -202,8 +181,8 @@ export const ClientReviewWorkspace = ({
               Adviser workspace will appear here
             </h2>
             <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-              The demo run is deterministic. It does not call AI, update a
-              production CRM, or generate financial recommendations.
+              Prepare the review to see current facts, meaningful changes, and
+              adviser actions for this client.
             </p>
           </div>
         )}
@@ -216,8 +195,20 @@ export const ClientReviewWorkspace = ({
           resetToken={uploadPanelResetToken}
           onUploaded={onUploaded}
         />
-        <UploadExecutionTrace metadata={latestUploadTrace} />
         <SourceRecordPanel records={reviewData?.sourceRecords ?? []} />
+        <TechnicalDetailsPanel
+          apiStatus={apiStatus}
+          extractionLabel={extractionLabel}
+          extractionWarning={extractionWarning}
+          latestUploadTrace={latestUploadTrace}
+          reviewData={reviewData}
+          skillLabel={skillLabel}
+        />
+        <DemoControlsPanel
+          isLoading={isLoading}
+          isResetting={isResetting}
+          onResetDemo={onResetDemo}
+        />
       </aside>
     </section>
 

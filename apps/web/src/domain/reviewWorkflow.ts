@@ -3,7 +3,11 @@ import type { ReviewResponse } from "@client-review-prep/shared";
 export type ReviewPhase = "ready" | "preparing" | "prepared";
 
 export const getReviewStatusLabel = (phase: ReviewPhase): string =>
-  phase === "prepared" ? "Ready for adviser review" : "Preparation in progress";
+  phase === "prepared"
+    ? "Ready for adviser review"
+    : phase === "preparing"
+      ? "Preparation in progress"
+      : "Ready to prepare";
 
 export const getReviewPhaseForDisplay = (
   phase: ReviewPhase,

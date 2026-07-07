@@ -177,7 +177,7 @@ export const workflowSteps = [
   }
 ] as const;
 
-export const seedDemoData = async (client: Prisma.TransactionClient) => {
+const upsertDemoClient = async (client: Prisma.TransactionClient) => {
   const existingClient = await client.client.findUnique({
     where: { id: DEMO_CLIENT_ID },
     select: { id: true }
@@ -206,7 +206,9 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
       }
     });
   }
+};
 
+const clearDemoReviewData = async (client: Prisma.TransactionClient) => {
   await client.adviserDecision.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
@@ -219,7 +221,9 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
   await client.sourceRecord.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
+};
 
+const seedSourceRecords = async (client: Prisma.TransactionClient) => {
   for (const sourceRecord of sourceRecords) {
     await client.sourceRecord.create({
       data: {
@@ -229,6 +233,20 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
       }
     });
   }
+};
+
+export const seedUnpreparedDemoData = async (
+  client: Prisma.TransactionClient
+) => {
+  await upsertDemoClient(client);
+  await clearDemoReviewData(client);
+  await seedSourceRecords(client);
+};
+
+export const seedDemoData = async (client: Prisma.TransactionClient) => {
+  await upsertDemoClient(client);
+  await clearDemoReviewData(client);
+  await seedSourceRecords(client);
 
   for (const fact of facts) {
     await client.clientFact.create({

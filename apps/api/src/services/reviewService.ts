@@ -22,7 +22,11 @@ import {
   type SourceRecordDto
 } from "@client-review-prep/shared";
 import { createLegacyCrmAdapter } from "../legacy/legacyCrmAdapter.js";
-import { DEMO_CLIENT_ID, seedDemoData, workflowSteps } from "../demo/seedDemoData.js";
+import {
+  DEMO_CLIENT_ID,
+  seedUnpreparedDemoData,
+  workflowSteps
+} from "../demo/seedDemoData.js";
 import {
   applyDecisionToFact,
   isDecisionAllowedForFact
@@ -341,15 +345,18 @@ export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
   memoryExplanation: fact.explanation
 });
 
-export const buildMeaningfulChanges = (facts: readonly FactForReview[]) => [
-  ...meaningfulChanges,
-  ...facts
-    .filter((fact) => fact.candidateValue !== null)
-    .map(
-      (fact) =>
-        `${fact.field} candidate: ${fact.officialValue} to ${fact.candidateValue}`
-    )
-];
+export const buildMeaningfulChanges = (facts: readonly FactForReview[]) =>
+  facts.length === 0
+    ? []
+    : [
+        ...meaningfulChanges,
+        ...facts
+          .filter((fact) => fact.candidateValue !== null)
+          .map(
+            (fact) =>
+              `${fact.field} candidate: ${fact.officialValue} to ${fact.candidateValue}`
+          )
+      ];
 
 export const countUnresolvedReviewItems = (facts: readonly FactForReview[]) =>
   facts.filter((fact) => unresolvedReviewStatuses.has(fact.lifecycleStatus)).length;
@@ -931,7 +938,7 @@ export const createReviewService = (
 
   const resetDemo = async () => {
     await client.$transaction(async (transaction) => {
-      await seedDemoData(transaction);
+      await seedUnpreparedDemoData(transaction);
       await hooks.beforeResetCommit?.();
     });
     return buildReviewResponse(DEMO_CLIENT_ID);

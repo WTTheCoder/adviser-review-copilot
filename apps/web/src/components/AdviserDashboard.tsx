@@ -3,6 +3,10 @@ import {
   selectDashboardSummary,
   type DashboardAttentionItem
 } from "../domain/reviewSelectors.js";
+import {
+  getReviewStatusLabel,
+  hasPreparedReviewWorkspaceData
+} from "../domain/reviewWorkflow.js";
 
 type AdviserDashboardProps = {
   review: ReviewResponse;
@@ -21,9 +25,16 @@ export const AdviserDashboard = ({
   onOpenReview
 }: AdviserDashboardProps) => {
   const dashboard = selectDashboardSummary(review);
+  const hasPreparedWorkspaceData = hasPreparedReviewWorkspaceData(review);
+  const reviewStatus = hasPreparedWorkspaceData
+    ? getReviewStatusLabel("prepared")
+    : getReviewStatusLabel("ready");
   const factsReviewed =
-    dashboard.summaryMetrics.find((metric) => metric.label === "Facts reviewed")
-      ?.value ?? "0";
+    hasPreparedWorkspaceData
+      ? dashboard.summaryMetrics.find(
+          (metric) => metric.label === "Facts reviewed"
+        )?.value ?? "0"
+      : "0";
   const kpis = [
     {
       label: "Open actions",
@@ -39,7 +50,7 @@ export const AdviserDashboard = ({
     },
     {
       label: "Review status",
-      value: dashboard.currentReview.reviewStatus
+      value: reviewStatus
     }
   ];
 
@@ -223,7 +234,7 @@ export const AdviserDashboard = ({
                 <dt className="font-semibold text-[var(--muted)]">Status</dt>
                 <dd className="mt-1">
                   <span className="status-chip status-chip-warning">
-                    {dashboard.currentReview.reviewStatus}
+                    {reviewStatus}
                   </span>
                 </dd>
               </div>

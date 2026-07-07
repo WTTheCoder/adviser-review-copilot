@@ -436,19 +436,15 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     releaseDecision.resolve();
 
     await expect(decision).rejects.toBeInstanceOf(DecisionConflictError);
-    expect(await factState("fact-risk-profile")).toMatchObject({
-      officialValue: "Balanced",
-      candidateValue: "Growth-oriented",
-      previousValue: null,
-      lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
-      revision: 0
-    });
+    expect(
+      await primary.clientFact.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
     expect(
       await primary.adviserDecision.count({ where: { clientId: DEMO_CLIENT_ID } })
     ).toBe(0);
     expect(
       await primary.workflowRun.count({ where: { clientId: DEMO_CLIENT_ID } })
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it("preserves a newer adviser decision when preparation resumes", async () => {
@@ -930,16 +926,75 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     await commitPreparation(service, expectedMutationEpoch, [
       addressCandidate("Fremantle")
     ]);
-    await service.resetDemo();
+    const resetReview = await service.resetDemo();
 
-    expect(await factState("fact-address")).toMatchObject({
-      officialValue: "East Perth",
-      officialSourceRecordId: "source-annual-review",
-      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
-      candidateValue: "Subiaco",
-      candidateSourceRecordId: "source-meeting-note",
-      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z")
+    expect(resetReview).toMatchObject({
+      client: {
+        id: DEMO_CLIENT_ID,
+        reviewStatus: "Preparation in progress"
+      },
+      clientFacts: [],
+      meaningfulChanges: [],
+      adviserActions: [],
+      workflowTrace: []
     });
+    expect(resetReview.summaryMetrics).toEqual([
+      { value: "6", label: "Facts reviewed" },
+      { value: "0", label: "Meaningful changes" },
+      { value: "0", label: "Items needing confirmation" }
+    ]);
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      await primary.clientFact.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+    expect(
+      await primary.adviserDecision.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+    expect(
+      await primary.workflowRun.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+  });
+
+  it("removes prepared review data and uploaded sources while preserving seed sources on reset", async () => {
+    const coordinator = new ClientOperationCoordinator();
+    const service = createReviewService(
+      primary,
+      coordinator
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await coordinator.runClientMutation(DEMO_CLIENT_ID, () =>
+      service.createUploadedSourceRecord(
+        createUploadedSourceInput(
+          expectedMutationEpoch,
+          "reset-note.txt",
+          "Uploaded source that should be removed by reset."
+        )
+      )
+    );
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-address", {
+      decision: DecisionType.LEAVE_UNVERIFIED
+    });
+
+    const resetReview = await service.resetDemo();
+
+    expect(resetReview.clientFacts).toEqual([]);
+    expect(resetReview.adviserActions).toEqual([]);
+    expect(resetReview.meaningfulChanges).toEqual([]);
+    expect(resetReview.workflowTrace).toEqual([]);
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      resetReview.sourceRecords.some((record) => record.title.includes("Uploaded"))
+    ).toBe(false);
   });
 
   it("rolls back the complete reset when the seed transaction fails", async () => {

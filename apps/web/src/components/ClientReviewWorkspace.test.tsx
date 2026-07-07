@@ -13,8 +13,10 @@ import {
   type ClientReviewWorkspaceProps
 } from "./ClientReviewWorkspace.js";
 import { CurrentClientPicture } from "./CurrentClientPicture.js";
+import { DemoControlsPanel } from "./DemoControlsPanel.js";
 import { EvidenceDrawer } from "./EvidenceDrawer.js";
 import { SourceUploadPanel } from "./SourceUploadPanel.js";
+import { TechnicalDetailsPanel } from "./TechnicalDetailsPanel.js";
 import type { AdviserAction, ClientFact } from "../types/demo.js";
 
 type InspectableProps = Record<string, unknown> & {
@@ -219,15 +221,43 @@ describe("ClientReviewWorkspace", () => {
 
     expect(markup).toContain("Adviser Review Copilot");
     expect(markup).toContain("Source-backed preparation for client reviews");
-    expect(markup).toContain("API connected");
     expect(markup).toContain("Facts reviewed");
     expect(markup).toContain("Current client picture");
     expect(markup).toContain("Meaningful changes");
     expect(markup).toContain("Adviser actions");
-    expect(markup).toContain("View execution trace");
     expect(markup).toContain("Upload source note");
     expect(markup).toContain("Source records");
     expect(markup).toContain("2025 Annual Review");
+    expect(markup).toContain("Technical details");
+    expect(markup).toContain("Demo controls");
+  });
+
+  it("keeps technical and demo-only content out of the primary workspace by default", () => {
+    const markup = renderWorkspace({
+      extractionLabel: "Extraction: Mock",
+      latestUploadTrace: {
+        skillName: "ingest-client-document",
+        skillVersion: "legacy",
+        status: "SUCCEEDED",
+        events: [
+          {
+            sequence: 1,
+            label: "Upload request validated",
+            status: "COMPLETE",
+            detail: null,
+            timestamp: "2026-06-24T00:00:00.000Z"
+          }
+        ]
+      }
+    });
+
+    expect(markup).not.toContain("API connected");
+    expect(markup).not.toContain("Extraction: Mock");
+    expect(markup).not.toContain("Selected skill: prepare-annual-review");
+    expect(markup).not.toContain("View execution trace");
+    expect(markup).not.toContain("View upload execution trace");
+    expect(markup).not.toContain("Upload request validated");
+    expect(markup).not.toContain("Reset local demo data");
   });
 
   it("preserves the existing pre-preparation workspace state", () => {
@@ -246,7 +276,11 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain("Ready to prepare");
     expect(markup).toContain("Adviser workspace will appear here");
     expect(markup).toContain("Prepare Client Review");
+    expect(markup).toContain("Source material is available for this review.");
     expect(markup).not.toContain("Current client picture");
+    expect(markup).not.toContain("fictional");
+    expect(markup).not.toContain("does not call AI");
+    expect(markup).not.toContain("production CRM");
   });
 
   it("keeps direct shell action callbacks wired", () => {
@@ -263,13 +297,11 @@ describe("ClientReviewWorkspace", () => {
     );
     const resetButton = findElement(
       tree,
-      (element) =>
-        element.type === "button" &&
-        textContent(element.props.children) === "Reset local demo data"
+      (element) => element.type === DemoControlsPanel
     );
 
     expect(prepareButton?.props.onClick).toBe(onPrepareReview);
-    expect(resetButton?.props.onClick).toBe(onResetDemo);
+    expect(resetButton?.props.onResetDemo).toBe(onResetDemo);
   });
 
   it("passes orchestration callbacks to composed workflow components", () => {
@@ -299,6 +331,10 @@ describe("ClientReviewWorkspace", () => {
       tree,
       (element) => element.type === SourceUploadPanel
     );
+    const technicalDetailsPanel = findElement(
+      tree,
+      (element) => element.type === TechnicalDetailsPanel
+    );
     const evidenceDrawer = findElement(
       tree,
       (element) => element.type === EvidenceDrawer
@@ -307,6 +343,7 @@ describe("ClientReviewWorkspace", () => {
     expect(currentClientPicture?.props.onSelectFact).toBe(onSelectFact);
     expect(adviserActions?.props.onDecision).toBe(onDecision);
     expect(sourceUploadPanel?.props.onUploaded).toBe(onUploaded);
+    expect(technicalDetailsPanel?.props.apiStatus).toBe("connected");
     expect(evidenceDrawer?.props.onClose).toBe(onCloseEvidence);
   });
 
@@ -321,7 +358,7 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain("Close");
   });
 
-  it("shows upload execution trace when App passes the latest upload trace", () => {
+  it("keeps source upload and source records in the business workspace", () => {
     const markup = renderWorkspace({
       latestUploadTrace: {
         skillName: "ingest-client-document",
@@ -339,7 +376,9 @@ describe("ClientReviewWorkspace", () => {
       }
     });
 
-    expect(markup).toContain("View upload execution trace");
-    expect(markup).toContain("Upload request validated");
+    expect(markup).toContain("Upload source note");
+    expect(markup).toContain("Source records");
+    expect(markup).toContain("2025 Annual Review");
+    expect(markup).not.toContain("Upload request validated");
   });
 });

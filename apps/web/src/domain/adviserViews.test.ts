@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ClientFact, ClientReviewData } from "../types/demo.js";
-import { openClientReviewState } from "./adviserViews.js";
+import {
+  adviserViewFromHash,
+  canonicalHashForAdviserHash,
+  hashForAdviserView,
+  openClientReviewState
+} from "./adviserViews.js";
 
 const createFact = (id: string): ClientFact => ({
   id,
@@ -54,5 +59,25 @@ describe("adviser view state", () => {
       activeView: "client-review",
       selectedFact: null
     });
+  });
+
+  it("maps adviser views to stable URL hashes", () => {
+    expect(hashForAdviserView("dashboard")).toBe("#overview");
+    expect(hashForAdviserView("my-actions")).toBe("#my-actions");
+    expect(hashForAdviserView("client-review")).toBe("#client-review");
+  });
+
+  it("restores adviser views from hashes with Overview fallback", () => {
+    expect(adviserViewFromHash("#overview")).toBe("dashboard");
+    expect(adviserViewFromHash("#my-actions")).toBe("my-actions");
+    expect(adviserViewFromHash("#client-review")).toBe("client-review");
+    expect(adviserViewFromHash("#unknown")).toBe("dashboard");
+    expect(adviserViewFromHash("")).toBe("dashboard");
+  });
+
+  it("canonicalises invalid hashes to Overview", () => {
+    expect(canonicalHashForAdviserHash("#invalid")).toBe("#overview");
+    expect(canonicalHashForAdviserHash("")).toBe("#overview");
+    expect(canonicalHashForAdviserHash("#my-actions")).toBe("#my-actions");
   });
 });

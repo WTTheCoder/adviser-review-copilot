@@ -10,8 +10,13 @@ import type { ReviewResponse } from "@client-review-prep/shared";
 
 describe("review workflow labels", () => {
   it("starts with ready-state labels", () => {
-    expect(getReviewStatusLabel("ready")).toBe("Preparation in progress");
+    expect(getReviewStatusLabel("ready")).toBe("Ready to prepare");
     expect(getPrepareButtonLabel("ready")).toBe("Prepare Client Review");
+  });
+
+  it("keeps active preparation distinct from ready state", () => {
+    expect(getReviewStatusLabel("preparing")).toBe("Preparation in progress");
+    expect(getPrepareButtonLabel("preparing")).toBe("Preparing review...");
   });
 
   it("uses completed review copy after preparation finishes", () => {
