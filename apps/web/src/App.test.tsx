@@ -10,7 +10,7 @@ import {
 import { selectActionQueue, selectDashboardSummary } from "./domain/reviewSelectors.js";
 import type { AdviserView } from "./domain/adviserViews.js";
 
-const resetReview = {
+const resetReview: ReviewResponse = {
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
@@ -39,7 +39,154 @@ const resetReview = {
   meaningfulChanges: [],
   adviserActions: [],
   workflowTrace: []
-} satisfies ReviewResponse;
+};
+
+const preparedReview: ReviewResponse = {
+  ...resetReview,
+  client: {
+    ...resetReview.client,
+    reviewStatus: "Ready for adviser review"
+  },
+  summaryMetrics: [
+    { value: "12", label: "Facts reviewed" },
+    { value: "6", label: "Meaningful changes" },
+    { value: "2", label: "Items needing confirmation" }
+  ],
+  clientFacts: [
+    {
+      id: "fact-employment",
+      field: "Employment",
+      currentLabel: "Current",
+      currentValue: "New Energy Ltd",
+      officialValue: "New Energy Ltd",
+      candidateValue: null,
+      previousValue: "ABC Mining",
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: "source-legacy-crm",
+      previousSourceDocument: "Legacy CRM Record",
+      previousObservedAt: "2023-05-10T00:00:00.000Z",
+      previousObservedDate: "10 May 2023",
+      candidateSourceRecordId: null,
+      candidateSourceDocument: null,
+      candidateObservedAt: null,
+      candidateObservedDate: null,
+      candidateEvidence: null,
+      confidence: "High",
+      lifecycleStatus: "CURRENT",
+      status: "Current",
+      memoryExplanation: "Employment was reconciled from source material."
+    },
+    {
+      id: "fact-address",
+      field: "Address",
+      currentLabel: "Current official value",
+      currentValue: "East Perth",
+      officialValue: "East Perth",
+      candidateValue: "Subiaco",
+      previousValue: null,
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex may have moved to Subiaco, but the address has not been confirmed.",
+      confidence: "Medium",
+      lifecycleStatus: "NEEDS_CONFIRMATION",
+      status: "Needs confirmation",
+      memoryExplanation: "Address requires adviser confirmation."
+    },
+    {
+      id: "fact-risk-profile",
+      field: "Risk profile",
+      currentLabel: "Official value",
+      currentValue: "Balanced",
+      officialValue: "Balanced",
+      candidateValue: "Growth-oriented",
+      previousValue: null,
+      sourceRecordId: "source-annual-review",
+      sourceDocument: "Annual Review",
+      observedAt: "2025-11-16T00:00:00.000Z",
+      observedDate: "16 November 2025",
+      officialSourceRecordId: "source-annual-review",
+      officialSourceDocument: "Annual Review",
+      officialObservedAt: "2025-11-16T00:00:00.000Z",
+      officialObservedDate: "16 November 2025",
+      previousSourceRecordId: null,
+      previousSourceDocument: null,
+      previousObservedAt: null,
+      previousObservedDate: null,
+      candidateSourceRecordId: "source-meeting-note",
+      candidateSourceDocument: "Adviser Meeting Note",
+      candidateObservedAt: "2026-06-04T00:00:00.000Z",
+      candidateObservedDate: "4 June 2026",
+      candidateEvidence:
+        "Alex is considering a more growth-oriented investment approach.",
+      confidence: "Medium",
+      lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
+      status: "Requires adviser approval",
+      memoryExplanation: "Risk profile requires adviser approval."
+    }
+  ],
+  meaningfulChanges: [
+    "Employer changed from ABC Mining to New Energy Ltd",
+    "Annual income increased from AUD 110,000 to AUD 135,000",
+    "Superannuation increased from AUD 125,000 to AUD 174,000",
+    "Home-buying timeframe changed from five years to two years",
+    "Address candidate: East Perth to Subiaco",
+    "Risk profile candidate: Balanced to Growth-oriented"
+  ],
+  adviserActions: [
+    {
+      id: "confirm-address",
+      factId: "fact-address",
+      title: "Confirm whether Alex has moved to Subiaco",
+      detail: "Meeting note mentions Subiaco, but the address has not been verified.",
+      status: "Needs confirmation",
+      lifecycleStatus: "NEEDS_CONFIRMATION",
+      primaryDecision: "CONFIRM",
+      secondaryDecision: "LEAVE_UNVERIFIED",
+      primaryLabel: "Confirm",
+      secondaryLabel: "Leave unverified",
+      latestDecision: null,
+      decisionHistory: []
+    },
+    {
+      id: "review-risk-profile",
+      factId: "fact-risk-profile",
+      title:
+        "Review the possible change from Balanced to a growth-oriented risk approach",
+      detail:
+        "This is a high-impact attribute and needs adviser approval before use.",
+      status: "Requires adviser approval",
+      lifecycleStatus: "REQUIRES_ADVISER_APPROVAL",
+      primaryDecision: "APPROVE",
+      secondaryDecision: "KEEP_CURRENT",
+      primaryLabel: "Approve",
+      secondaryLabel: "Keep current",
+      latestDecision: null,
+      decisionHistory: []
+    }
+  ]
+};
 
 const renderContent = (activeView: AdviserView, review = resetReview) => {
   const workspaceState = getClientReviewWorkspaceState({
@@ -86,6 +233,30 @@ describe("App reset and view orchestration", () => {
     expect(getInitialAdviserView("#invalid")).toBe("dashboard");
   });
 
+  it("renders refreshed prepared review data across primary views after preparation", () => {
+    const clientReviewMarkup = renderContent("client-review", preparedReview);
+    const overviewMarkup = renderContent("dashboard", preparedReview);
+    const actionsMarkup = renderContent("my-actions", preparedReview);
+
+    expect(clientReviewMarkup).toContain("Re-run Preparation");
+    expect(clientReviewMarkup).toContain("Ready for adviser review");
+    expect(clientReviewMarkup).toContain("Current client picture");
+    expect(clientReviewMarkup).toContain("Confirm whether Alex has moved to Subiaco");
+    expect(clientReviewMarkup).toContain(
+      "Review the possible change from Balanced to Growth-oriented"
+    );
+    expect(clientReviewMarkup).not.toContain(
+      "Prepare the review to see current facts"
+    );
+    expect(overviewMarkup).toContain("12");
+    expect(overviewMarkup).toContain("6");
+    expect(overviewMarkup).toContain("2");
+    expect(overviewMarkup).toContain("Confirm whether Alex has moved to Subiaco");
+    expect(actionsMarkup).toContain("2 open actions");
+    expect(actionsMarkup).toContain("Needs confirmation");
+    expect(actionsMarkup).toContain("Requires adviser approval");
+  });
+
   it("replaces stale prepared review data with the reset response and keeps Client Review active", () => {
     const resetState = getResetClientReviewState(
       resetReview,
@@ -119,10 +290,9 @@ describe("App reset and view orchestration", () => {
     expect(markup).toContain("Prepare Client Review");
     expect(markup).toContain("Ready to prepare");
     expect(markup).toContain("Adviser workspace will appear here");
-    expect(markup).toContain("Source records");
-    expect(markup).toContain("Annual Review");
     expect(markup).not.toContain("Preparation in progress");
     expect(markup).not.toContain("Current client picture");
+    expect(markup).not.toContain("Source records");
     expect(markup).not.toContain("Evidence and memory");
     expect(markup).not.toContain("Confirm whether Alex has moved to Subiaco");
   });

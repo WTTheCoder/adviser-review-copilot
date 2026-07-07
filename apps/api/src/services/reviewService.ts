@@ -24,6 +24,7 @@ import {
 import { createLegacyCrmAdapter } from "../legacy/legacyCrmAdapter.js";
 import {
   DEMO_CLIENT_ID,
+  seedDemoBaselineFacts,
   seedUnpreparedDemoData,
   workflowSteps
 } from "../demo/seedDemoData.js";
@@ -618,6 +619,13 @@ export const createReviewService = (
           input.expectedMutationEpoch,
           { reviewStatus: "Ready for adviser review" }
         );
+        const factCount = await transaction.clientFact.count({
+          where: { clientId: input.clientId }
+        });
+
+        if (input.clientId === DEMO_CLIENT_ID && factCount === 0) {
+          await seedDemoBaselineFacts(transaction);
+        }
 
         const versionSuffix = input.skillVersion
           ? `-v${input.skillVersion}`

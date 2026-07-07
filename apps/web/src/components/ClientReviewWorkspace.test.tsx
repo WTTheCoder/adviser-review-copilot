@@ -5,18 +5,18 @@ import {
   type ReactNode
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReviewResponse } from "@client-review-prep/shared";
-import { AdviserActions } from "./AdviserActions.js";
 import {
   ClientReviewWorkspace,
+  getWorkspaceTabAfterSelection,
+  persistedValueForWorkspaceTab,
+  readInitialWorkspaceTab,
+  WorkspaceTabs,
+  workspaceTabFromPersistedValue,
+  workspaceTabStorageKey,
   type ClientReviewWorkspaceProps
 } from "./ClientReviewWorkspace.js";
-import { CurrentClientPicture } from "./CurrentClientPicture.js";
-import { DemoControlsPanel } from "./DemoControlsPanel.js";
-import { EvidenceDrawer } from "./EvidenceDrawer.js";
-import { SourceUploadPanel } from "./SourceUploadPanel.js";
-import { TechnicalDetailsPanel } from "./TechnicalDetailsPanel.js";
 import type { AdviserAction, ClientFact } from "../types/demo.js";
 
 type InspectableProps = Record<string, unknown> & {
@@ -175,6 +175,36 @@ const createWorkspaceProps = (
   ...overrides
 });
 
+const reviewWithDecision = (): ReviewResponse => ({
+  ...review,
+  adviserActions: [
+    {
+      ...review.adviserActions[0]!,
+      latestDecision: {
+        decision: "CONFIRM",
+        note: "Confirmed with client.",
+        candidateValue: "Subiaco",
+        officialValueBefore: "East Perth",
+        resultingOfficialValue: "Subiaco",
+        actor: "demo-adviser",
+        createdAt: "2026-06-24T00:00:00.000Z"
+      },
+      decisionHistory: [
+        {
+          decision: "CONFIRM",
+          note: "Confirmed with client.",
+          candidateValue: "Subiaco",
+          officialValueBefore: "East Perth",
+          resultingOfficialValue: "Subiaco",
+          actor: "demo-adviser",
+          createdAt: "2026-06-24T00:00:00.000Z"
+        }
+      ]
+    },
+    review.adviserActions[1]!
+  ]
+});
+
 const renderWorkspace = (props: Partial<ClientReviewWorkspaceProps> = {}) =>
   renderToStaticMarkup(<ClientReviewWorkspace {...createWorkspaceProps(props)} />);
 
@@ -216,20 +246,139 @@ const textContent = (node: ReactNode): string =>
     .join("");
 
 describe("ClientReviewWorkspace", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders the existing prepared review sections", () => {
     const markup = renderWorkspace();
 
-    expect(markup).toContain("Adviser Review Copilot");
-    expect(markup).toContain("Source-backed preparation for client reviews");
+    expect(markup).toContain("Alex Taylor");
+    expect(markup).toContain("2026 Client Review");
+    expect(markup).toContain("Adviser: Jordan Lee");
+    expect(markup).toContain("2 open actions");
+    expect(markup).toContain("Review");
+    expect(markup).toContain("Evidence &amp; Sources");
+    expect(markup).toContain("Decision History");
+    expect(markup).toContain("Client Summary");
     expect(markup).toContain("Facts reviewed");
     expect(markup).toContain("Current client picture");
     expect(markup).toContain("Meaningful changes");
     expect(markup).toContain("Adviser actions");
-    expect(markup).toContain("Upload source note");
-    expect(markup).toContain("Source records");
-    expect(markup).toContain("2025 Annual Review");
+    expect(markup).not.toContain("Upload source note");
+    expect(markup).not.toContain("Source records");
     expect(markup).toContain("Technical details");
     expect(markup).toContain("Demo controls");
+  });
+
+  it("renders accessible workspace tabs and wires tab switching callbacks", () => {
+    const onChange = vi.fn();
+    const tree = (
+      <WorkspaceTabs activeTab="review" onChange={onChange} tabPrefix="client" />
+    );
+    const markup = renderToStaticMarkup(tree);
+    const tabTree = WorkspaceTabs({
+      activeTab: "review",
+      onChange,
+      tabPrefix: "client"
+    });
+    const evidenceTab = findElement(
+      tabTree,
+      (element) =>
+        element.type === "button" &&
+        textContent(element.props.children) === "Evidence & Sources"
+    );
+
+    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain('role="tab"');
+    expect(markup).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-controls="client-review"');
+
+    (evidenceTab?.props.onClick as () => void)();
+
+    expect(onChange).toHaveBeenCalledWith("evidence");
+  });
+
+  it("restores Client Summary from session storage on refresh", () => {
+    vi.stubGlobal("window", {
+      sessionStorage: {
+        getItem: vi.fn(() => "client-summary"),
+        setItem: vi.fn()
+      }
+    });
+
+    const markup = renderWorkspace();
+
+    expect(readInitialWorkspaceTab()).toBe("summary");
+    expect(markup).toContain("Review preparation summary");
+    expect(markup).toContain("Current client picture");
+    expect(markup).not.toContain("Adviser actions");
+  });
+
+  it("keeps Client Summary selected through the refresh loading-to-prepared sequence", () => {
+    const storedValueBeforeMount = "client-summary";
+
+    expect(readInitialWorkspaceTab("summary")).toBe("summary");
+    expect(
+      getWorkspaceTabAfterSelection({
+        activeTab: workspaceTabFromPersistedValue(storedValueBeforeMount),
+        currentSelectedFact: null,
+        hasReviewData: false,
+        isPrepared: false
+      })
+    ).toBe("summary");
+    expect(
+      getWorkspaceTabAfterSelection({
+        activeTab: "summary",
+        currentSelectedFact: null,
+        hasReviewData: true,
+        isPrepared: true
+      })
+    ).toBe("summary");
+  });
+
+  it.each([
+    ["review", "review"],
+    ["evidence-sources", "evidence"],
+    ["decision-history", "history"],
+    ["client-summary", "summary"]
+  ] as const)("restores stored workspace tab %s", (storedValue, tab) => {
+    vi.stubGlobal("window", {
+      sessionStorage: {
+        getItem: vi.fn(() => storedValue),
+        setItem: vi.fn()
+      }
+    });
+
+    expect(readInitialWorkspaceTab()).toBe(tab);
+    expect(workspaceTabFromPersistedValue(storedValue)).toBe(tab);
+    expect(persistedValueForWorkspaceTab(tab)).toBe(storedValue);
+  });
+
+  it("falls back to Review for an invalid stored workspace tab", () => {
+    vi.stubGlobal("window", {
+      sessionStorage: {
+        getItem: vi.fn(() => "not-a-workspace-tab"),
+        setItem: vi.fn()
+      }
+    });
+
+    const markup = renderWorkspace();
+
+    expect(readInitialWorkspaceTab()).toBe("review");
+    expect(markup).toContain("Adviser actions");
+    expect(markup).not.toContain("Review preparation summary");
+  });
+
+  it("shows source features only in Evidence & Sources", () => {
+    const reviewMarkup = renderWorkspace();
+    const evidenceMarkup = renderWorkspace({ initialTab: "evidence" });
+
+    expect(reviewMarkup).not.toContain("Upload source note");
+    expect(reviewMarkup).not.toContain("Source records");
+    expect(evidenceMarkup).toContain("Upload source note");
+    expect(evidenceMarkup).toContain("Source records");
+    expect(evidenceMarkup).toContain("2025 Annual Review");
   });
 
   it("keeps technical and demo-only content out of the primary workspace by default", () => {
@@ -283,70 +432,6 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).not.toContain("production CRM");
   });
 
-  it("keeps direct shell action callbacks wired", () => {
-    const onPrepareReview = vi.fn();
-    const onResetDemo = vi.fn();
-    const tree = ClientReviewWorkspace(
-      createWorkspaceProps({ onPrepareReview, onResetDemo })
-    );
-    const prepareButton = findElement(
-      tree,
-      (element) =>
-        element.type === "button" &&
-        textContent(element.props.children) === "Re-run Preparation"
-    );
-    const resetButton = findElement(
-      tree,
-      (element) => element.type === DemoControlsPanel
-    );
-
-    expect(prepareButton?.props.onClick).toBe(onPrepareReview);
-    expect(resetButton?.props.onResetDemo).toBe(onResetDemo);
-  });
-
-  it("passes orchestration callbacks to composed workflow components", () => {
-    const onSelectFact = vi.fn();
-    const onDecision = vi.fn();
-    const onUploaded = vi.fn();
-    const onCloseEvidence = vi.fn();
-    const tree = ClientReviewWorkspace(
-      createWorkspaceProps({
-        currentSelectedFact: review.clientFacts[0] ?? null,
-        selectedFactAction: review.adviserActions[0] ?? null,
-        onCloseEvidence,
-        onDecision,
-        onSelectFact,
-        onUploaded
-      })
-    );
-    const currentClientPicture = findElement(
-      tree,
-      (element) => element.type === CurrentClientPicture
-    );
-    const adviserActions = findElement(
-      tree,
-      (element) => element.type === AdviserActions
-    );
-    const sourceUploadPanel = findElement(
-      tree,
-      (element) => element.type === SourceUploadPanel
-    );
-    const technicalDetailsPanel = findElement(
-      tree,
-      (element) => element.type === TechnicalDetailsPanel
-    );
-    const evidenceDrawer = findElement(
-      tree,
-      (element) => element.type === EvidenceDrawer
-    );
-
-    expect(currentClientPicture?.props.onSelectFact).toBe(onSelectFact);
-    expect(adviserActions?.props.onDecision).toBe(onDecision);
-    expect(sourceUploadPanel?.props.onUploaded).toBe(onUploaded);
-    expect(technicalDetailsPanel?.props.apiStatus).toBe("connected");
-    expect(evidenceDrawer?.props.onClose).toBe(onCloseEvidence);
-  });
-
   it("renders selected fact evidence without changing the drawer behaviour", () => {
     const markup = renderWorkspace({
       currentSelectedFact: review.clientFacts[0] ?? null,
@@ -358,8 +443,9 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain("Close");
   });
 
-  it("keeps source upload and source records in the business workspace", () => {
+  it("keeps source upload and source records in the Evidence & Sources workspace", () => {
     const markup = renderWorkspace({
+      initialTab: "evidence",
       latestUploadTrace: {
         skillName: "ingest-client-document",
         skillVersion: "legacy",
@@ -380,5 +466,72 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).toContain("Source records");
     expect(markup).toContain("2025 Annual Review");
     expect(markup).not.toContain("Upload request validated");
+  });
+
+  it("forces direct selected-fact navigation and reset states back to the Review tab", () => {
+    expect(workspaceTabStorageKey).toBe(
+      "adviser-review-copilot.client-review.workspace-tab"
+    );
+    expect(
+      getWorkspaceTabAfterSelection({
+        activeTab: workspaceTabFromPersistedValue("client-summary"),
+        currentSelectedFact: review.clientFacts[0] ?? null,
+        hasReviewData: true,
+        isPrepared: true
+      })
+    ).toBe("review");
+    expect(
+      getWorkspaceTabAfterSelection({
+        activeTab: workspaceTabFromPersistedValue("decision-history"),
+        currentSelectedFact: null,
+        hasReviewData: true,
+        isPrepared: false
+      })
+    ).toBe("review");
+    expect(
+      getWorkspaceTabAfterSelection({
+        activeTab: "history",
+        currentSelectedFact: null,
+        isPrepared: true
+      })
+    ).toBe("history");
+  });
+
+  it("renders persisted decision history newest first with recorded values", () => {
+    const markup = renderWorkspace({
+      initialTab: "history",
+      reviewData: reviewWithDecision()
+    });
+
+    expect(markup).toContain("Decision history");
+    expect(markup).toContain("Persisted adviser decisions for this review.");
+    expect(markup).toContain("Address");
+    expect(markup).toContain("CONFIRM");
+    expect(markup).toContain("demo-adviser");
+    expect(markup).toContain("East Perth");
+    expect(markup).toContain("Subiaco");
+  });
+
+  it("renders an honest empty state when decision history is empty", () => {
+    const markup = renderWorkspace({ initialTab: "history" });
+
+    expect(markup).toContain(
+      "No adviser decisions have been recorded for this review yet."
+    );
+  });
+
+  it("renders the selector-driven client preparation summary", () => {
+    const markup = renderWorkspace({
+      initialTab: "summary",
+      reviewData: reviewWithDecision()
+    });
+
+    expect(markup).toContain("Review preparation summary");
+    expect(markup).toContain("This is not financial advice.");
+    expect(markup).toContain("Current client picture");
+    expect(markup).toContain("Confirmed changes");
+    expect(markup).toContain("Outstanding questions");
+    expect(markup).toContain("Adviser decisions");
+    expect(markup).toContain("Subiaco");
   });
 });

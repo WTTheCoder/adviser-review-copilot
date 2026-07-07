@@ -235,6 +235,34 @@ const seedSourceRecords = async (client: Prisma.TransactionClient) => {
   }
 };
 
+export const seedDemoBaselineFacts = async (
+  client: Prisma.TransactionClient
+) => {
+  for (const fact of facts) {
+    await client.clientFact.create({
+      data: {
+        ...fact,
+        candidateValue: null,
+        candidateSourceRecordId: null,
+        candidateObservedAt: null,
+        candidateEvidence: null,
+        lifecycleStatus: LifecycleStatus.CURRENT,
+        confidence:
+          fact.id === "fact-address" || fact.id === "fact-risk-profile"
+            ? "High"
+            : fact.confidence,
+        explanation:
+          fact.id === "fact-address"
+            ? "East Perth remains the official address until a newer source is reviewed."
+            : fact.id === "fact-risk-profile"
+            ? "Balanced remains the official risk profile until a newer source is reviewed."
+            : fact.explanation,
+        clientId: DEMO_CLIENT_ID
+      }
+    });
+  }
+};
+
 export const seedUnpreparedDemoData = async (
   client: Prisma.TransactionClient
 ) => {

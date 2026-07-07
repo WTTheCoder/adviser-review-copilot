@@ -7,6 +7,8 @@ import {
 } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedDemoData, DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
+import { createAgentRuntime } from "../agent/createAgentRuntime.js";
+import { reviewResponseSchema } from "@client-review-prep/shared";
 import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
 import {
   ClientMutationConflictError,
@@ -995,6 +997,106 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     expect(
       resetReview.sourceRecords.some((record) => record.title.includes("Uploaded"))
     ).toBe(false);
+  });
+
+  it("recreates the deterministic prepared review after reset through the preparation skill", async () => {
+    const coordinator = new ClientOperationCoordinator();
+    const service = createReviewService(primary, coordinator);
+    const { harness } = createAgentRuntime(primary, service);
+    const baseline = await service.buildReviewResponse(DEMO_CLIENT_ID);
+
+    expect(baseline.summaryMetrics).toEqual([
+      { value: "12", label: "Facts reviewed" },
+      { value: "6", label: "Meaningful changes" },
+      { value: "2", label: "Items needing confirmation" }
+    ]);
+    expect(baseline.clientFacts).toHaveLength(6);
+    expect(baseline.meaningfulChanges).toHaveLength(6);
+    expect(baseline.adviserActions).toHaveLength(2);
+
+    const resetReview = await service.resetDemo();
+
+    expect(resetReview).toMatchObject({
+      client: {
+        id: DEMO_CLIENT_ID,
+        reviewStatus: "Preparation in progress"
+      },
+      clientFacts: [],
+      meaningfulChanges: [],
+      adviserActions: []
+    });
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      resetReview.sourceRecords.find((record) => record.id === "source-meeting-note")
+        ?.content
+    ).toEqual([
+      "Alex is considering a more growth-oriented investment approach.",
+      "Alex may have moved to Subiaco, but the address has not been confirmed.",
+      "The home purchase remains a near-term priority."
+    ]);
+
+    const preparedResult = await harness.execute(
+      "prepare-annual-review",
+      { clientId: DEMO_CLIENT_ID },
+      reviewResponseSchema,
+      DEMO_CLIENT_ID
+    );
+
+    expect(preparedResult.ok).toBe(true);
+    if (!preparedResult.ok) {
+      throw new Error("Preparation failed unexpectedly.");
+    }
+
+    const preparedReview = preparedResult.output;
+    const address = preparedReview.clientFacts.find(
+      (fact) => fact.id === "fact-address"
+    );
+    const riskProfile = preparedReview.clientFacts.find(
+      (fact) => fact.id === "fact-risk-profile"
+    );
+
+    expect(preparedReview.client.reviewStatus).toBe("Ready for adviser review");
+    expect(preparedReview.summaryMetrics).toEqual([
+      { value: "12", label: "Facts reviewed" },
+      { value: "6", label: "Meaningful changes" },
+      { value: "2", label: "Items needing confirmation" }
+    ]);
+    expect(preparedReview.clientFacts.map((fact) => fact.field)).toEqual([
+      "Employment",
+      "Annual income",
+      "Superannuation",
+      "Address",
+      "Financial goal",
+      "Risk profile"
+    ]);
+    expect(preparedReview.meaningfulChanges).toHaveLength(6);
+    expect(preparedReview.adviserActions.map((action) => action.id).sort()).toEqual([
+      "confirm-address",
+      "review-risk-profile"
+    ]);
+    expect(address).toMatchObject({
+      candidateValue: "Subiaco",
+      lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION,
+      candidateSourceRecordId: "source-meeting-note"
+    });
+    expect(riskProfile).toMatchObject({
+      candidateValue: "Growth-oriented",
+      lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
+      candidateSourceRecordId: "source-meeting-note"
+    });
+
+    const fetchedReview = await service.buildReviewResponse(DEMO_CLIENT_ID);
+
+    expect(fetchedReview.summaryMetrics).toEqual(preparedReview.summaryMetrics);
+    expect(fetchedReview.clientFacts).toEqual(preparedReview.clientFacts);
+    expect(fetchedReview.adviserActions).toEqual(preparedReview.adviserActions);
+    expect(fetchedReview.meaningfulChanges).toEqual(
+      preparedReview.meaningfulChanges
+    );
   });
 
   it("rolls back the complete reset when the seed transaction fails", async () => {
