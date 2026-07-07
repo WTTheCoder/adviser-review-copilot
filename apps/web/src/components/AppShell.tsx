@@ -6,8 +6,8 @@ type AppShellProps = {
 };
 
 export const AppShell = ({ navigation = null, children }: AppShellProps) => (
-  <main className="min-h-screen bg-stone-50 text-slate-950">
+  <main className="app-shell">
     {navigation}
-    {children}
+    <div className="app-main">{children}</div>
   </main>
 );
