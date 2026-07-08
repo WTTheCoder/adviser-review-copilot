@@ -174,7 +174,10 @@ export const AdviserAppContent = ({
       <MyActions review={reviewData} onOpenReview={onOpenReview} />
     ) : null}
     {activeView === "client-reviews" ? (
-      <ClientReviewsList onOpenAlexReview={() => onOpenReview()} />
+      <ClientReviewsList
+        review={reviewData}
+        onOpenAlexReview={() => onOpenReview()}
+      />
     ) : null}
     {activeView === "client-review" ||
     (!reviewData && activeView !== "client-reviews") ? (
