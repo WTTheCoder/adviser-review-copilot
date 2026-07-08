@@ -188,7 +188,7 @@ const upsertDemoClient = async (client: Prisma.TransactionClient) => {
       where: { id: DEMO_CLIENT_ID },
       data: {
         name: "Alex Taylor",
-        adviserName: "Jordan Lee",
+        adviserName: "Jordan Bennett",
         reviewYear: 2026,
         reviewStatus: "Preparation in progress",
         mutationEpoch: { increment: 1 }
@@ -199,7 +199,7 @@ const upsertDemoClient = async (client: Prisma.TransactionClient) => {
       data: {
         id: DEMO_CLIENT_ID,
         name: "Alex Taylor",
-        adviserName: "Jordan Lee",
+        adviserName: "Jordan Bennett",
         reviewYear: 2026,
         reviewStatus: "Preparation in progress",
         mutationEpoch: 0

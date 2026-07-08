@@ -9,7 +9,7 @@ describe("legacy CRM adapter", () => {
         findUnique: async () => ({
           id: DEMO_CLIENT_ID,
           name: "Alex Taylor",
-          adviserName: "Jordan Lee",
+          adviserName: "Jordan Bennett",
           reviewYear: 2026,
           reviewStatus: "Preparation in progress",
           createdAt: new Date(),
