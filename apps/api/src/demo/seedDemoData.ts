@@ -177,7 +177,7 @@ export const workflowSteps = [
   }
 ] as const;
 
-export const seedDemoData = async (client: Prisma.TransactionClient) => {
+const upsertDemoClient = async (client: Prisma.TransactionClient) => {
   const existingClient = await client.client.findUnique({
     where: { id: DEMO_CLIENT_ID },
     select: { id: true }
@@ -188,7 +188,7 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
       where: { id: DEMO_CLIENT_ID },
       data: {
         name: "Alex Taylor",
-        adviserName: "Jordan Lee",
+        adviserName: "Jordan Bennett",
         reviewYear: 2026,
         reviewStatus: "Preparation in progress",
         mutationEpoch: { increment: 1 }
@@ -199,14 +199,16 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
       data: {
         id: DEMO_CLIENT_ID,
         name: "Alex Taylor",
-        adviserName: "Jordan Lee",
+        adviserName: "Jordan Bennett",
         reviewYear: 2026,
         reviewStatus: "Preparation in progress",
         mutationEpoch: 0
       }
     });
   }
+};
 
+const clearDemoReviewData = async (client: Prisma.TransactionClient) => {
   await client.adviserDecision.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
@@ -219,7 +221,9 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
   await client.sourceRecord.deleteMany({
     where: { clientId: DEMO_CLIENT_ID }
   });
+};
 
+const seedSourceRecords = async (client: Prisma.TransactionClient) => {
   for (const sourceRecord of sourceRecords) {
     await client.sourceRecord.create({
       data: {
@@ -229,6 +233,48 @@ export const seedDemoData = async (client: Prisma.TransactionClient) => {
       }
     });
   }
+};
+
+export const seedDemoBaselineFacts = async (
+  client: Prisma.TransactionClient
+) => {
+  for (const fact of facts) {
+    await client.clientFact.create({
+      data: {
+        ...fact,
+        candidateValue: null,
+        candidateSourceRecordId: null,
+        candidateObservedAt: null,
+        candidateEvidence: null,
+        lifecycleStatus: LifecycleStatus.CURRENT,
+        confidence:
+          fact.id === "fact-address" || fact.id === "fact-risk-profile"
+            ? "High"
+            : fact.confidence,
+        explanation:
+          fact.id === "fact-address"
+            ? "East Perth remains the official address until a newer source is reviewed."
+            : fact.id === "fact-risk-profile"
+            ? "Balanced remains the official risk profile until a newer source is reviewed."
+            : fact.explanation,
+        clientId: DEMO_CLIENT_ID
+      }
+    });
+  }
+};
+
+export const seedUnpreparedDemoData = async (
+  client: Prisma.TransactionClient
+) => {
+  await upsertDemoClient(client);
+  await clearDemoReviewData(client);
+  await seedSourceRecords(client);
+};
+
+export const seedDemoData = async (client: Prisma.TransactionClient) => {
+  await upsertDemoClient(client);
+  await clearDemoReviewData(client);
+  await seedSourceRecords(client);
 
   for (const fact of facts) {
     await client.clientFact.create({

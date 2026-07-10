@@ -1,8 +1,14 @@
 const statusStyles: Record<string, string> = {
-  Current: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  Superseded: "border-slate-200 bg-slate-100 text-slate-700",
-  "Needs confirmation": "border-amber-200 bg-amber-50 text-amber-800",
-  "Requires adviser approval": "border-cyan-200 bg-cyan-50 text-cyan-800"
+  Current: "status-chip-success",
+  Superseded: "",
+  "Needs confirmation": "status-chip-warning",
+  "Requires adviser approval": "status-chip-info",
+  "Ready for adviser review": "status-chip-success",
+  "Ready to prepare": "status-chip-loading",
+  "Preparing review": "status-chip-loading",
+  "Ready for client meeting": "status-chip-success",
+  "Review completed": "status-chip-success",
+  "Awaiting source documents": "status-chip-warning"
 };
 
 type StatusBadgeProps = {
@@ -11,7 +17,7 @@ type StatusBadgeProps = {
 
 export const StatusBadge = ({ status }: StatusBadgeProps) => (
   <span
-    className={`inline-flex rounded border px-2.5 py-1 text-xs font-semibold ${
+    className={`status-chip ${
       statusStyles[status] ?? statusStyles.Current
     }`}
   >

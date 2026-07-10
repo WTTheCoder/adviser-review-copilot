@@ -22,7 +22,12 @@ import {
   type SourceRecordDto
 } from "@client-review-prep/shared";
 import { createLegacyCrmAdapter } from "../legacy/legacyCrmAdapter.js";
-import { DEMO_CLIENT_ID, seedDemoData, workflowSteps } from "../demo/seedDemoData.js";
+import {
+  DEMO_CLIENT_ID,
+  seedDemoBaselineFacts,
+  seedUnpreparedDemoData,
+  workflowSteps
+} from "../demo/seedDemoData.js";
 import {
   applyDecisionToFact,
   isDecisionAllowedForFact
@@ -92,6 +97,7 @@ const unresolvedReviewStatuses = new Set<LifecycleStatus>([
   LifecycleStatus.NEEDS_CONFIRMATION,
   LifecycleStatus.REQUIRES_ADVISER_APPROVAL
 ]);
+const highImpactEscalationTraceLabel = "High-impact changes escalated";
 
 const formatDate = (date: Date) =>
   new Intl.DateTimeFormat("en-AU", {
@@ -341,15 +347,18 @@ export const mapFactToDto = (fact: FactForReview): ClientFactDto => ({
   memoryExplanation: fact.explanation
 });
 
-export const buildMeaningfulChanges = (facts: readonly FactForReview[]) => [
-  ...meaningfulChanges,
-  ...facts
-    .filter((fact) => fact.candidateValue !== null)
-    .map(
-      (fact) =>
-        `${fact.field} candidate: ${fact.officialValue} to ${fact.candidateValue}`
-    )
-];
+export const buildMeaningfulChanges = (facts: readonly FactForReview[]) =>
+  facts.length === 0
+    ? []
+    : [
+        ...meaningfulChanges,
+        ...facts
+          .filter((fact) => fact.candidateValue !== null)
+          .map(
+            (fact) =>
+              `${fact.field} candidate: ${fact.officialValue} to ${fact.candidateValue}`
+          )
+      ];
 
 export const countUnresolvedReviewItems = (facts: readonly FactForReview[]) =>
   facts.filter((fact) => unresolvedReviewStatuses.has(fact.lifecycleStatus)).length;
@@ -611,6 +620,13 @@ export const createReviewService = (
           input.expectedMutationEpoch,
           { reviewStatus: "Ready for adviser review" }
         );
+        const factCount = await transaction.clientFact.count({
+          where: { clientId: input.clientId }
+        });
+
+        if (input.clientId === DEMO_CLIENT_ID && factCount === 0) {
+          await seedDemoBaselineFacts(transaction);
+        }
 
         const versionSuffix = input.skillVersion
           ? `-v${input.skillVersion}`
@@ -630,6 +646,17 @@ export const createReviewService = (
           input.clientId,
           input.candidates
         );
+        const unresolvedReviewItemCount = await transaction.clientFact.count({
+          where: {
+            clientId: input.clientId,
+            lifecycleStatus: {
+              in: [
+                LifecycleStatus.NEEDS_CONFIRMATION,
+                LifecycleStatus.REQUIRES_ADVISER_APPROVAL
+              ]
+            }
+          }
+        });
         await transaction.workflowStep.createMany({
           data: input.workflowSteps.map((step, index) => ({
             id: `${run.id}-step-${index + 1}`,
@@ -637,7 +664,10 @@ export const createReviewService = (
             sequence: index + 1,
             label: step.label,
             status: step.status,
-            detail: step.detail ?? null
+            detail:
+              step.label === highImpactEscalationTraceLabel
+                ? `${unresolvedReviewItemCount} adviser-review items require attention.`
+                : step.detail ?? null
           }))
         });
       })
@@ -931,7 +961,7 @@ export const createReviewService = (
 
   const resetDemo = async () => {
     await client.$transaction(async (transaction) => {
-      await seedDemoData(transaction);
+      await seedUnpreparedDemoData(transaction);
       await hooks.beforeResetCommit?.();
     });
     return buildReviewResponse(DEMO_CLIENT_ID);

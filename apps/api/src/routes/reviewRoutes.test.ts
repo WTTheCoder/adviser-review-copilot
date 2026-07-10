@@ -23,7 +23,7 @@ const review: ReviewResponse = {
   client: {
     id: "demo-alex-taylor",
     name: "Alex Taylor",
-    adviserName: "Jordan Lee",
+    adviserName: "Jordan Bennett",
     reviewYear: 2026,
     reviewStatus: "Ready for adviser review"
   },
@@ -643,13 +643,53 @@ describe("review routes", () => {
 
   it("resets the demo through the service", async () => {
     const { server, service } = await createTestServer();
+    service.resetDemo.mockResolvedValueOnce({
+      ...review,
+      client: {
+        ...review.client,
+        reviewStatus: "Preparation in progress"
+      },
+      summaryMetrics: [
+        { value: "6", label: "Facts reviewed" },
+        { value: "0", label: "Meaningful changes" },
+        { value: "0", label: "Items needing confirmation" }
+      ],
+      sourceRecords: [
+        {
+          id: "source-annual-review",
+          type: "ANNUAL_REVIEW",
+          title: "Annual Review",
+          observedAt: "2025-11-16T00:00:00.000Z",
+          observedDate: "16 November 2025",
+          summary: "Verified annual-review record.",
+          content: ["Annual review content"],
+          lifecycleStatus: "CURRENT"
+        }
+      ],
+      clientFacts: [],
+      meaningfulChanges: [],
+      adviserActions: [],
+      workflowTrace: []
+    });
     const response = await server.inject({
       method: "POST",
       url: "/api/demo/reset"
     });
+    const body = response.json<ReviewResponse>();
 
     expect(response.statusCode).toBe(200);
     expect(service.resetDemo).toHaveBeenCalledOnce();
+    expect(body.client.reviewStatus).toBe("Preparation in progress");
+    expect(body.summaryMetrics).toEqual([
+      { value: "6", label: "Facts reviewed" },
+      { value: "0", label: "Meaningful changes" },
+      { value: "0", label: "Items needing confirmation" }
+    ]);
+    expect(body.clientFacts).toEqual([]);
+    expect(body.meaningfulChanges).toEqual([]);
+    expect(body.adviserActions).toEqual([]);
+    expect(body.workflowTrace).toEqual([]);
+    expect(body.sourceRecords).toHaveLength(1);
     await server.close();
   });
 

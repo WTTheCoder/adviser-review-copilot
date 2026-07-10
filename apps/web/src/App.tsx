@@ -4,19 +4,17 @@ import {
   healthResponseSchema,
   reviewResponseSchema,
   type DecisionType,
+  type DocumentUploadResponse,
   type HealthResponse,
   type ReviewResponse
 } from "@client-review-prep/shared";
-import { AdviserActions } from "./components/AdviserActions.js";
-import { ApiStatusBadge, type ApiStatus } from "./components/ApiStatusBadge.js";
-import { CurrentClientPicture } from "./components/CurrentClientPicture.js";
-import { EvidenceDrawer } from "./components/EvidenceDrawer.js";
-import { ExecutionTrace } from "./components/ExecutionTrace.js";
-import { MeaningfulChanges } from "./components/MeaningfulChanges.js";
-import { SourceRecordPanel } from "./components/SourceRecordPanel.js";
-import { SourceUploadPanel } from "./components/SourceUploadPanel.js";
-import { SummaryMetrics } from "./components/SummaryMetrics.js";
-import { UploadExecutionTrace } from "./components/UploadExecutionTrace.js";
+import { AppShell } from "./components/AppShell.js";
+import { AdviserDashboard } from "./components/AdviserDashboard.js";
+import { AdviserNavigation } from "./components/AdviserNavigation.js";
+import { type ApiStatus } from "./components/ApiStatusBadge.js";
+import { ClientReviewWorkspace } from "./components/ClientReviewWorkspace.js";
+import { ClientReviewsList } from "./components/ClientReviewsList.js";
+import { MyActions } from "./components/MyActions.js";
 import {
   clearUploadTrace,
   replaceUploadTrace
@@ -24,20 +22,204 @@ import {
 import { parseDecisionResponse } from "./domain/decisionResponse.js";
 import {
   getPrepareButtonLabel,
+  hasPreparedReviewWorkspaceData,
   getPrimaryExtractionWarning,
+  getReviewPhaseForDisplay,
   getReviewStatusLabel,
   type ReviewPhase
 } from "./domain/reviewWorkflow.js";
 import { createDecisionSubmissionLock } from "./domain/decisionSubmissionLock.js";
 import { createClientOperationGeneration } from "./domain/clientOperationGeneration.js";
+import {
+  adviserViewFromHash,
+  canonicalHashForAdviserHash,
+  hashForAdviserView,
+  openClientReviewState,
+  type AdviserView
+} from "./domain/adviserViews.js";
 import type { ClientFact, UploadExecutionMetadata } from "./types/demo.js";
 
 const DEMO_CLIENT_ID = "demo-alex-taylor";
+
+export type ClientReviewWorkspaceState = {
+  currentSelectedFact: ClientFact | null;
+  isPrepared: boolean;
+  isPreparing: boolean;
+  prepareButtonLabel: string;
+  reviewStatus: string;
+  selectedFactAction: ReviewResponse["adviserActions"][number] | null;
+};
+
+export type ResetClientReviewState = {
+  activeView: AdviserView;
+  reviewData: ReviewResponse;
+  reviewPhase: ReviewPhase;
+  selectedFact: ClientFact | null;
+};
+
+export const getInitialAdviserView = (
+  hash = typeof window === "undefined" ? "" : window.location.hash
+): AdviserView => adviserViewFromHash(hash);
+
+export const getResetClientReviewState = (
+  resetReview: ReviewResponse,
+  activeView: AdviserView
+): ResetClientReviewState => ({
+  activeView,
+  reviewData: resetReview,
+  reviewPhase: "ready",
+  selectedFact: null
+});
+
+export const getClientReviewWorkspaceState = ({
+  reviewData,
+  reviewPhase,
+  selectedFact
+}: {
+  reviewData: ReviewResponse | null;
+  reviewPhase: ReviewPhase;
+  selectedFact: ClientFact | null;
+}): ClientReviewWorkspaceState => {
+  const displayReviewPhase = getReviewPhaseForDisplay(
+    reviewPhase,
+    reviewData?.client.reviewStatus,
+    hasPreparedReviewWorkspaceData(reviewData)
+  );
+  const currentSelectedFact =
+    selectedFact && reviewData
+      ? reviewData.clientFacts.find((fact) => fact.id === selectedFact.id) ??
+        selectedFact
+      : selectedFact;
+  const selectedFactAction =
+    currentSelectedFact && reviewData
+      ? reviewData.adviserActions.find(
+          (action) => action.factId === currentSelectedFact.id
+        ) ?? null
+      : null;
+
+  return {
+    currentSelectedFact,
+    isPrepared: displayReviewPhase === "prepared",
+    isPreparing: displayReviewPhase === "preparing",
+    prepareButtonLabel: getPrepareButtonLabel(displayReviewPhase),
+    reviewStatus: getReviewStatusLabel(displayReviewPhase),
+    selectedFactAction
+  };
+};
+
+export type AdviserAppContentProps = {
+  activeView: AdviserView;
+  apiBaseUrl: string;
+  apiStatus: ApiStatus;
+  clientId: string;
+  extractionLabel: string | null;
+  extractionWarning: string | null;
+  isLoading: boolean;
+  isResetting: boolean;
+  latestUploadTrace: UploadExecutionMetadata | null;
+  loadError: string | null;
+  noticeMessage: string | null;
+  reviewData: ReviewResponse | null;
+  savingFactId: string | null;
+  skillLabel: string;
+  uploadPanelResetToken: number;
+  workspaceState: ClientReviewWorkspaceState;
+  onCloseEvidence: () => void;
+  onDecision: (factId: string, decision: DecisionType) => void;
+  onOpenClientReviews: () => void;
+  onOpenReview: (factId?: string) => void;
+  onPrepareReview: () => void;
+  onResetDemo: () => void;
+  onSelectFact: (fact: ClientFact) => void;
+  onUploaded: (upload: DocumentUploadResponse) => void;
+  onViewChange: (view: AdviserView) => void;
+};
+
+export const AdviserAppContent = ({
+  activeView,
+  apiBaseUrl,
+  apiStatus,
+  clientId,
+  extractionLabel,
+  extractionWarning,
+  isLoading,
+  isResetting,
+  latestUploadTrace,
+  loadError,
+  noticeMessage,
+  reviewData,
+  savingFactId,
+  skillLabel,
+  uploadPanelResetToken,
+  workspaceState,
+  onCloseEvidence,
+  onDecision,
+  onOpenClientReviews,
+  onOpenReview,
+  onPrepareReview,
+  onResetDemo,
+  onSelectFact,
+  onUploaded,
+  onViewChange
+}: AdviserAppContentProps) => (
+  <AppShell
+    navigation={
+      <AdviserNavigation activeView={activeView} onChange={onViewChange} />
+    }
+  >
+    {reviewData && activeView === "dashboard" ? (
+      <AdviserDashboard review={reviewData} onOpenReview={onOpenReview} />
+    ) : null}
+    {reviewData && activeView === "my-actions" ? (
+      <MyActions review={reviewData} onOpenReview={onOpenReview} />
+    ) : null}
+    {activeView === "client-reviews" ? (
+      <ClientReviewsList
+        review={reviewData}
+        onOpenAlexReview={() => onOpenReview()}
+      />
+    ) : null}
+    {activeView === "client-review" ||
+    (!reviewData && activeView !== "client-reviews") ? (
+      <ClientReviewWorkspace
+        apiBaseUrl={apiBaseUrl}
+        apiStatus={apiStatus}
+        clientId={clientId}
+        currentSelectedFact={workspaceState.currentSelectedFact}
+        extractionLabel={extractionLabel}
+        extractionWarning={extractionWarning}
+        isLoading={isLoading}
+        isPrepared={workspaceState.isPrepared}
+        isPreparing={workspaceState.isPreparing}
+        isResetting={isResetting}
+        latestUploadTrace={latestUploadTrace}
+        loadError={loadError}
+        noticeMessage={noticeMessage}
+        prepareButtonLabel={workspaceState.prepareButtonLabel}
+        reviewData={reviewData}
+        reviewStatus={workspaceState.reviewStatus}
+        savingFactId={savingFactId}
+        selectedFactAction={workspaceState.selectedFactAction}
+        skillLabel={skillLabel}
+        uploadPanelResetToken={uploadPanelResetToken}
+        onCloseEvidence={onCloseEvidence}
+        onDecision={onDecision}
+        onBackToClientReviews={onOpenClientReviews}
+        onPrepareReview={onPrepareReview}
+        onResetDemo={onResetDemo}
+        onSelectFact={onSelectFact}
+        onUploaded={onUploaded}
+      />
+    ) : null}
+  </AppShell>
+);
 
 export const App = () => {
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
   const [reviewData, setReviewData] = useState<ReviewResponse | null>(null);
   const [reviewPhase, setReviewPhase] = useState<ReviewPhase>("ready");
+  const [activeView, setActiveView] =
+    useState<AdviserView>(getInitialAdviserView);
   const [selectedFact, setSelectedFact] = useState<ClientFact | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
@@ -87,6 +269,35 @@ export const App = () => {
       controller.abort();
     };
   }, [apiBaseUrl]);
+
+  useEffect(() => {
+    const syncViewFromHash = () => {
+      const nextView = adviserViewFromHash(window.location.hash);
+      const canonicalHash = canonicalHashForAdviserHash(window.location.hash);
+
+      setActiveView(nextView);
+
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(null, "", canonicalHash);
+      }
+    };
+
+    syncViewFromHash();
+    window.addEventListener("hashchange", syncViewFromHash);
+
+    return () => {
+      window.removeEventListener("hashchange", syncViewFromHash);
+    };
+  }, []);
+
+  const changeActiveView = (view: AdviserView) => {
+    setActiveView(view);
+    const nextHash = hashForAdviserView(view);
+
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, "", nextHash);
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -297,9 +508,11 @@ export const App = () => {
 
       const resetReview = reviewResponseSchema.parse(await response.json());
       clientOperationGeneration.current.applyIfCurrent(resetGeneration, () => {
-        setReviewData(resetReview);
-        setReviewPhase("ready");
-        setSelectedFact(null);
+        const resetState = getResetClientReviewState(resetReview, activeView);
+        setReviewData(resetState.reviewData);
+        setReviewPhase(resetState.reviewPhase);
+        setSelectedFact(resetState.selectedFact);
+        setActiveView(resetState.activeView);
         setLatestUploadTrace(clearUploadTrace());
         setNoticeMessage(null);
       });
@@ -321,11 +534,30 @@ export const App = () => {
     }
   };
 
+  const handleUploadedSource = (upload: DocumentUploadResponse) => {
+    const operationGeneration = clientOperationGeneration.current.capture();
+    clientOperationGeneration.current.applyIfCurrent(operationGeneration, () =>
+      setLatestUploadTrace(replaceUploadTrace(upload))
+    );
+    void refreshReview(operationGeneration);
+  };
+
+  const openClientReview = (factId?: string) => {
+    const nextState = openClientReviewState(reviewData, factId);
+    changeActiveView(nextState.activeView);
+    setSelectedFact(nextState.selectedFact);
+  };
+  const openClientReviews = () => {
+    changeActiveView("client-reviews");
+    setSelectedFact(null);
+  };
+
   const isLoading = !reviewData && !loadError;
-  const isPrepared = reviewPhase === "prepared";
-  const isPreparing = reviewPhase === "preparing";
-  const reviewStatus = getReviewStatusLabel(reviewPhase);
-  const prepareButtonLabel = getPrepareButtonLabel(reviewPhase);
+  const workspaceState = getClientReviewWorkspaceState({
+    reviewData,
+    reviewPhase,
+    selectedFact
+  });
   const skillLabel = reviewData?.executionMetadata
     ? reviewData.executionMetadata.skillName === "apply-adviser-decision"
       ? `Executed skill: ${reviewData.executionMetadata.skillName}`
@@ -343,175 +575,34 @@ export const App = () => {
   const extractionWarning = getPrimaryExtractionWarning(
     reviewData?.extractionMetadata?.warnings
   );
-  const currentSelectedFact =
-    selectedFact && reviewData
-      ? reviewData.clientFacts.find((fact) => fact.id === selectedFact.id) ??
-        selectedFact
-      : selectedFact;
-  const selectedFactAction =
-    currentSelectedFact && reviewData
-      ? reviewData.adviserActions.find(
-          (action) => action.factId === currentSelectedFact.id
-        ) ?? null
-      : null;
 
   return (
-    <main className="min-h-screen bg-stone-50 text-slate-950">
-      <section className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-7 lg:px-8">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-cyan-700">
-                Adviser Review Copilot
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-normal text-slate-950 sm:text-4xl">
-                Source-backed preparation for client reviews
-              </h1>
-              <div className="mt-5 flex flex-wrap gap-3 text-sm text-slate-700">
-                <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 font-medium">
-                  {reviewData?.client.name ?? "Alex Taylor"}
-                </span>
-                <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  {reviewData ? `${reviewData.client.reviewYear} Client Review` : "2026 Client Review"}
-                </span>
-                <span className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5">
-                  Adviser: {reviewData?.client.adviserName ?? "Jordan Lee"}
-                </span>
-                <span className="rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-amber-800">
-                  {reviewData?.client.reviewStatus ?? reviewStatus}
-                </span>
-              </div>
-            </div>
-            <div className="flex flex-col items-start gap-3 lg:items-end">
-              <ApiStatusBadge status={apiStatus} />
-              <button
-                className="rounded bg-cyan-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-700 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-400"
-                disabled={isPreparing || isLoading || isResetting}
-                type="button"
-                onClick={handlePrepareReview}
-              >
-                {prepareButtonLabel}
-              </button>
-              <button
-                className="text-xs font-semibold text-slate-500 underline-offset-4 hover:text-slate-800 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
-                disabled={isResetting || isLoading}
-                type="button"
-                onClick={handleResetDemo}
-              >
-                {isResetting ? "Resetting local demo..." : "Reset local demo data"}
-              </button>
-            </div>
-          </div>
-
-          {loadError ? (
-            <div className="rounded border border-rose-200 bg-rose-50 p-5 text-sm leading-6 text-rose-800">
-              {loadError}
-            </div>
-          ) : null}
-
-          {noticeMessage ? (
-            <div className="rounded border border-cyan-200 bg-cyan-50 p-5 text-sm leading-6 text-cyan-900">
-              {noticeMessage}
-            </div>
-          ) : null}
-
-          {isLoading ? (
-            <div className="rounded border border-slate-200 bg-slate-50 p-5">
-              <p className="text-sm font-semibold text-slate-900">
-                Loading review data
-              </p>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Connecting to the review API and local PostgreSQL-backed demo data.
-              </p>
-            </div>
-          ) : null}
-
-          {reviewData && !isPrepared ? (
-            <div className="rounded border border-slate-200 bg-slate-50 p-5">
-              <p className="text-sm font-semibold text-slate-900">Ready to prepare</p>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Three fictional source records are loaded from the database. Start
-                the preparation run to reconcile current facts, preserve superseded
-                history, and surface the items that need adviser confirmation.
-              </p>
-            </div>
-          ) : null}
-
-          {reviewData && isPrepared ? (
-            <>
-              <div className="text-xs font-semibold text-slate-500">
-                {skillLabel}
-                {extractionLabel ? (
-                  <span className="ml-3 text-slate-400">{extractionLabel}</span>
-                ) : null}
-                {extractionWarning ? (
-                  <span className="ml-3 text-amber-700">{extractionWarning}</span>
-                ) : null}
-              </div>
-              <SummaryMetrics metrics={reviewData.summaryMetrics} />
-            </>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="mx-auto grid w-full max-w-7xl gap-6 px-5 py-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-8">
-        <div className="space-y-6">
-          {reviewData && isPrepared ? (
-            <>
-              <CurrentClientPicture
-                facts={reviewData.clientFacts}
-                onSelectFact={setSelectedFact}
-              />
-              <div className="grid gap-6 xl:grid-cols-2">
-                <MeaningfulChanges changes={reviewData.meaningfulChanges} />
-                <AdviserActions
-                  facts={reviewData.clientFacts}
-                  savingFactId={savingFactId}
-                  disabled={isResetting}
-                  items={reviewData.adviserActions}
-                  onDecision={handleDecision}
-                />
-              </div>
-              <ExecutionTrace items={reviewData.workflowTrace} />
-            </>
-          ) : (
-            <div className="rounded border border-dashed border-slate-300 bg-white p-8 text-center">
-              <h2 className="text-xl font-semibold text-slate-950">
-                Adviser workspace will appear here
-              </h2>
-              <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-600">
-                The demo run is deterministic. It does not call AI, update a
-                production CRM, or generate financial recommendations.
-              </p>
-            </div>
-          )}
-        </div>
-
-        <aside className="space-y-6">
-          <SourceUploadPanel
-            apiBaseUrl={apiBaseUrl}
-            clientId={DEMO_CLIENT_ID}
-            resetToken={uploadPanelResetToken}
-            onUploaded={(upload) => {
-              const operationGeneration =
-                clientOperationGeneration.current.capture();
-              clientOperationGeneration.current.applyIfCurrent(
-                operationGeneration,
-                () => setLatestUploadTrace(replaceUploadTrace(upload))
-              );
-              void refreshReview(operationGeneration);
-            }}
-          />
-          <UploadExecutionTrace metadata={latestUploadTrace} />
-          <SourceRecordPanel records={reviewData?.sourceRecords ?? []} />
-        </aside>
-      </section>
-
-      <EvidenceDrawer
-        adviserAction={selectedFactAction}
-        fact={currentSelectedFact}
-        onClose={() => setSelectedFact(null)}
-      />
-    </main>
+    <AdviserAppContent
+      activeView={activeView}
+      apiBaseUrl={apiBaseUrl}
+      apiStatus={apiStatus}
+      clientId={DEMO_CLIENT_ID}
+      extractionLabel={extractionLabel}
+      extractionWarning={extractionWarning}
+      isLoading={isLoading}
+      isResetting={isResetting}
+      latestUploadTrace={latestUploadTrace}
+      loadError={loadError}
+      noticeMessage={noticeMessage}
+      reviewData={reviewData}
+      savingFactId={savingFactId}
+      skillLabel={skillLabel}
+      uploadPanelResetToken={uploadPanelResetToken}
+      workspaceState={workspaceState}
+      onCloseEvidence={() => setSelectedFact(null)}
+      onDecision={handleDecision}
+      onOpenClientReviews={openClientReviews}
+      onOpenReview={openClientReview}
+      onPrepareReview={handlePrepareReview}
+      onResetDemo={handleResetDemo}
+      onSelectFact={setSelectedFact}
+      onUploaded={handleUploadedSource}
+      onViewChange={changeActiveView}
+    />
   );
 };

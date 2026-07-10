@@ -7,6 +7,8 @@ import {
 } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedDemoData, DEMO_CLIENT_ID } from "../demo/seedDemoData.js";
+import { createAgentRuntime } from "../agent/createAgentRuntime.js";
+import { reviewResponseSchema } from "@client-review-prep/shared";
 import { ClientOperationCoordinator } from "./clientOperationCoordinator.js";
 import {
   ClientMutationConflictError,
@@ -436,19 +438,15 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     releaseDecision.resolve();
 
     await expect(decision).rejects.toBeInstanceOf(DecisionConflictError);
-    expect(await factState("fact-risk-profile")).toMatchObject({
-      officialValue: "Balanced",
-      candidateValue: "Growth-oriented",
-      previousValue: null,
-      lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
-      revision: 0
-    });
+    expect(
+      await primary.clientFact.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
     expect(
       await primary.adviserDecision.count({ where: { clientId: DEMO_CLIENT_ID } })
     ).toBe(0);
     expect(
       await primary.workflowRun.count({ where: { clientId: DEMO_CLIENT_ID } })
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it("preserves a newer adviser decision when preparation resumes", async () => {
@@ -930,15 +928,190 @@ describe.sequential("PostgreSQL Batch 1 mutation guarantees", () => {
     await commitPreparation(service, expectedMutationEpoch, [
       addressCandidate("Fremantle")
     ]);
-    await service.resetDemo();
+    const resetReview = await service.resetDemo();
 
-    expect(await factState("fact-address")).toMatchObject({
-      officialValue: "East Perth",
-      officialSourceRecordId: "source-annual-review",
-      officialObservedAt: new Date("2025-11-16T00:00:00.000Z"),
+    expect(resetReview).toMatchObject({
+      client: {
+        id: DEMO_CLIENT_ID,
+        reviewStatus: "Preparation in progress"
+      },
+      clientFacts: [],
+      meaningfulChanges: [],
+      adviserActions: [],
+      workflowTrace: []
+    });
+    expect(resetReview.summaryMetrics).toEqual([
+      { value: "6", label: "Facts reviewed" },
+      { value: "0", label: "Meaningful changes" },
+      { value: "0", label: "Items needing confirmation" }
+    ]);
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      await primary.clientFact.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+    expect(
+      await primary.adviserDecision.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+    expect(
+      await primary.workflowRun.count({ where: { clientId: DEMO_CLIENT_ID } })
+    ).toBe(0);
+  });
+
+  it("removes prepared review data and uploaded sources while preserving seed sources on reset", async () => {
+    const coordinator = new ClientOperationCoordinator();
+    const service = createReviewService(
+      primary,
+      coordinator
+    );
+    const expectedMutationEpoch =
+      await service.captureClientMutationEpoch(DEMO_CLIENT_ID);
+
+    await coordinator.runClientMutation(DEMO_CLIENT_ID, () =>
+      service.createUploadedSourceRecord(
+        createUploadedSourceInput(
+          expectedMutationEpoch,
+          "reset-note.txt",
+          "Uploaded source that should be removed by reset."
+        )
+      )
+    );
+    await service.recordDecision(DEMO_CLIENT_ID, "fact-address", {
+      decision: DecisionType.LEAVE_UNVERIFIED
+    });
+
+    const resetReview = await service.resetDemo();
+
+    expect(resetReview.clientFacts).toEqual([]);
+    expect(resetReview.adviserActions).toEqual([]);
+    expect(resetReview.meaningfulChanges).toEqual([]);
+    expect(resetReview.workflowTrace).toEqual([]);
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      resetReview.sourceRecords.some((record) => record.title.includes("Uploaded"))
+    ).toBe(false);
+  });
+
+  it("recreates the deterministic prepared review after reset through the preparation skill", async () => {
+    const coordinator = new ClientOperationCoordinator();
+    const service = createReviewService(primary, coordinator);
+    const { harness } = createAgentRuntime(primary, service);
+    const baseline = await service.buildReviewResponse(DEMO_CLIENT_ID);
+
+    expect(baseline.summaryMetrics).toEqual([
+      { value: "12", label: "Facts reviewed" },
+      { value: "6", label: "Meaningful changes" },
+      { value: "2", label: "Items needing confirmation" }
+    ]);
+    expect(baseline.clientFacts).toHaveLength(6);
+    expect(baseline.meaningfulChanges).toHaveLength(6);
+    expect(baseline.adviserActions).toHaveLength(2);
+
+    const resetReview = await service.resetDemo();
+
+    expect(resetReview).toMatchObject({
+      client: {
+        id: DEMO_CLIENT_ID,
+        reviewStatus: "Preparation in progress"
+      },
+      clientFacts: [],
+      meaningfulChanges: [],
+      adviserActions: []
+    });
+    expect(resetReview.sourceRecords.map((record) => record.id).sort()).toEqual([
+      "source-annual-review",
+      "source-legacy-crm",
+      "source-meeting-note"
+    ]);
+    expect(
+      resetReview.sourceRecords.find((record) => record.id === "source-meeting-note")
+        ?.content
+    ).toEqual([
+      "Alex is considering a more growth-oriented investment approach.",
+      "Alex may have moved to Subiaco, but the address has not been confirmed.",
+      "The home purchase remains a near-term priority."
+    ]);
+
+    const preparedResult = await harness.execute(
+      "prepare-annual-review",
+      { clientId: DEMO_CLIENT_ID },
+      reviewResponseSchema,
+      DEMO_CLIENT_ID
+    );
+
+    expect(preparedResult.ok).toBe(true);
+    if (!preparedResult.ok) {
+      throw new Error("Preparation failed unexpectedly.");
+    }
+
+    const preparedReview = preparedResult.output;
+    const address = preparedReview.clientFacts.find(
+      (fact) => fact.id === "fact-address"
+    );
+    const riskProfile = preparedReview.clientFacts.find(
+      (fact) => fact.id === "fact-risk-profile"
+    );
+
+    expect(preparedReview.client.reviewStatus).toBe("Ready for adviser review");
+    expect(preparedReview.summaryMetrics).toEqual([
+      { value: "12", label: "Facts reviewed" },
+      { value: "6", label: "Meaningful changes" },
+      { value: "2", label: "Items needing confirmation" }
+    ]);
+    expect(preparedReview.clientFacts.map((fact) => fact.field)).toEqual([
+      "Employment",
+      "Annual income",
+      "Superannuation",
+      "Address",
+      "Financial goal",
+      "Risk profile"
+    ]);
+    expect(preparedReview.meaningfulChanges).toHaveLength(6);
+    expect(preparedReview.adviserActions.map((action) => action.id).sort()).toEqual([
+      "confirm-address",
+      "review-risk-profile"
+    ]);
+    expect(address).toMatchObject({
       candidateValue: "Subiaco",
-      candidateSourceRecordId: "source-meeting-note",
-      candidateObservedAt: new Date("2026-06-04T00:00:00.000Z")
+      lifecycleStatus: LifecycleStatus.NEEDS_CONFIRMATION,
+      candidateSourceRecordId: "source-meeting-note"
+    });
+    expect(riskProfile).toMatchObject({
+      candidateValue: "Growth-oriented",
+      lifecycleStatus: LifecycleStatus.REQUIRES_ADVISER_APPROVAL,
+      candidateSourceRecordId: "source-meeting-note"
+    });
+    expect(
+      preparedReview.workflowTrace.find(
+        (step) => step.label === "High-impact changes escalated"
+      )
+    ).toMatchObject({
+      status: WorkflowStepStatus.ESCALATED,
+      detail: "2 adviser-review items require attention."
+    });
+
+    const fetchedReview = await service.buildReviewResponse(DEMO_CLIENT_ID);
+
+    expect(fetchedReview.summaryMetrics).toEqual(preparedReview.summaryMetrics);
+    expect(fetchedReview.clientFacts).toEqual(preparedReview.clientFacts);
+    expect(fetchedReview.adviserActions).toEqual(preparedReview.adviserActions);
+    expect(fetchedReview.meaningfulChanges).toEqual(
+      preparedReview.meaningfulChanges
+    );
+    expect(
+      fetchedReview.workflowTrace.find(
+        (step) => step.label === "High-impact changes escalated"
+      )
+    ).toMatchObject({
+      status: WorkflowStepStatus.ESCALATED,
+      detail: "2 adviser-review items require attention."
     });
   });
 
