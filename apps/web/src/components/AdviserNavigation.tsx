@@ -26,15 +26,12 @@ export const AdviserNavigation = ({
 }: AdviserNavigationProps) => (
   <aside className="app-sidebar">
     <div className="flex h-full flex-col px-4 py-4">
-      <div className="flex items-start justify-between gap-4 lg:block">
+      <div>
         <div>
           <div className="text-base font-semibold">Adviser Review Copilot</div>
           <div className="mt-1 text-xs font-medium text-[var(--sidebar-muted)]">
             Review workspace
           </div>
-        </div>
-        <div className="hidden rounded border border-white/15 px-2 py-1 text-xs text-[var(--sidebar-muted)] lg:inline-flex">
-          Adviser
         </div>
       </div>
       <nav className="mt-4 lg:mt-8" aria-label="Primary adviser views">
@@ -65,7 +62,7 @@ export const AdviserNavigation = ({
       </nav>
       <div className="mt-auto hidden border-t border-white/10 pt-4 text-xs text-[var(--sidebar-muted)] lg:block">
         <div className="font-semibold text-white">Jordan Bennett</div>
-        <div className="mt-1">Adviser review queue</div>
+        <div className="mt-1">Adviser workspace</div>
       </div>
     </div>
   </aside>

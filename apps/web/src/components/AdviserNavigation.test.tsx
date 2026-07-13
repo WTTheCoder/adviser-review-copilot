@@ -66,6 +66,9 @@ describe("AdviserNavigation", () => {
     expect(markup).not.toContain("aria-selected");
     expect(markup).toContain('aria-current="page"');
     expect(markup).toContain("Jordan Bennett");
+    expect(markup).toContain("Adviser workspace");
+    expect(markup).not.toContain(">Adviser</div>");
+    expect(markup).not.toContain("Adviser review queue");
   });
 
   it("requests the selected view when a navigation item is activated", () => {
