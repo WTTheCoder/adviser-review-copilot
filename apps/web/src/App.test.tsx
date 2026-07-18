@@ -336,7 +336,7 @@ describe("App reset and view orchestration", () => {
     expect(activeView).toBe("client-reviews");
   });
 
-  it("keeps Overview and My Actions direct actions aimed at Alex detail", () => {
+  it("opens Client Reviews from the Overview CTA while My Actions opens Alex detail", () => {
     let activeView: AdviserView = "dashboard";
     const workspaceState = getClientReviewWorkspaceState({
       reviewData: preparedReview,
@@ -379,8 +379,8 @@ describe("App reset and view orchestration", () => {
       });
 
     const dashboard = findComponent(renderTree(), AdviserDashboard);
-    (dashboard?.props.onOpenReview as () => void)();
-    expect(activeView).toBe("client-review");
+    (dashboard?.props.onOpenClientReviews as () => void)();
+    expect(activeView).toBe("client-reviews");
 
     activeView = "my-actions";
     const actions = findComponent(renderTree(), MyActions);

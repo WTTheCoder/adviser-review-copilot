@@ -188,7 +188,11 @@ const findButton = (
 describe("AdviserDashboard", () => {
   it("renders supported current review data and metrics", () => {
     const markup = renderToStaticMarkup(
-      <AdviserDashboard review={review()} onOpenReview={() => undefined} />
+      <AdviserDashboard
+        review={review()}
+        onOpenClientReviews={() => undefined}
+        onOpenReview={() => undefined}
+      />
     );
 
     expect(markup).toContain("Adviser workspace");
@@ -207,6 +211,7 @@ describe("AdviserDashboard", () => {
     const markup = renderToStaticMarkup(
       <AdviserDashboard
         review={unpreparedReview()}
+        onOpenClientReviews={() => undefined}
         onOpenReview={() => undefined}
       />
     );
@@ -218,7 +223,11 @@ describe("AdviserDashboard", () => {
 
   it("shows the prepared fact count once workspace data exists", () => {
     const markup = renderToStaticMarkup(
-      <AdviserDashboard review={review()} onOpenReview={() => undefined} />
+      <AdviserDashboard
+        review={review()}
+        onOpenClientReviews={() => undefined}
+        onOpenReview={() => undefined}
+      />
     );
 
     expect(markup).toContain("<div class=\"mt-1 text-lg font-semibold text-slate-950\">8</div>");
@@ -232,6 +241,7 @@ describe("AdviserDashboard", () => {
           ...review(true),
           meaningfulChanges: []
         }}
+        onOpenClientReviews={() => undefined}
         onOpenReview={() => undefined}
       />
     );
@@ -247,7 +257,11 @@ describe("AdviserDashboard", () => {
 
   it("does not render unsupported dashboard categories", () => {
     const markup = renderToStaticMarkup(
-      <AdviserDashboard review={review()} onOpenReview={() => undefined} />
+      <AdviserDashboard
+        review={review()}
+        onOpenClientReviews={() => undefined}
+        onOpenReview={() => undefined}
+      />
     ).toLowerCase();
 
     expect(markup).not.toContain("upcoming");
@@ -256,16 +270,22 @@ describe("AdviserDashboard", () => {
     expect(markup).not.toContain("portfolio");
   });
 
-  it("opens Client Review from the primary and item actions", () => {
+  it("opens the Client Reviews list from the primary CTA and detail from item actions", () => {
+    const onOpenClientReviews = vi.fn();
     const onOpenReview = vi.fn();
-    const tree = AdviserDashboard({ review: review(), onOpenReview });
+    const tree = AdviserDashboard({
+      review: review(),
+      onOpenClientReviews,
+      onOpenReview
+    });
     const primary = findButton(tree, "Open client review");
     const item = findButton(tree, "Review item");
 
     (primary?.props.onClick as () => void)();
     (item?.props.onClick as () => void)();
 
-    expect(onOpenReview).toHaveBeenNthCalledWith(1);
-    expect(onOpenReview).toHaveBeenNthCalledWith(2, "fact-risk-profile");
+    expect(onOpenClientReviews).toHaveBeenCalledOnce();
+    expect(onOpenReview).toHaveBeenCalledOnce();
+    expect(onOpenReview).toHaveBeenCalledWith("fact-risk-profile");
   });
 });

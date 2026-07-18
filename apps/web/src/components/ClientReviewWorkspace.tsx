@@ -803,7 +803,7 @@ export const ClientReviewWorkspace = ({
         ) : null}
       </div>
 
-      <aside className="mt-5 grid gap-4 lg:grid-cols-2">
+      <aside className="mt-5 grid items-start gap-4 lg:grid-cols-2">
         <TechnicalDetailsPanel
           apiStatus={apiStatus}
           extractionLabel={extractionLabel}

@@ -291,6 +291,7 @@ describe("ClientReviewWorkspace", () => {
     expect(markup).not.toContain("Source records");
     expect(markup).toContain("Technical details");
     expect(markup).toContain("Demo controls");
+    expect(markup).toContain("mt-5 grid items-start gap-4 lg:grid-cols-2");
   });
 
   it("renders complete accessible workspace tab semantics", () => {
