@@ -11,6 +11,7 @@ import { StatusBadge } from "./StatusBadge.js";
 
 type AdviserDashboardProps = {
   review: ReviewResponse;
+  onOpenClientReviews: () => void;
   onOpenReview: (factId?: string) => void;
 };
 
@@ -23,6 +24,7 @@ const typeLabel = (category: DashboardAttentionItem["category"]) =>
 
 export const AdviserDashboard = ({
   review,
+  onOpenClientReviews,
   onOpenReview
 }: AdviserDashboardProps) => {
   const dashboard = selectDashboardSummary(review);
@@ -69,7 +71,7 @@ export const AdviserDashboard = ({
         <button
           className="primary-action focus-ring self-start"
           type="button"
-          onClick={() => onOpenReview()}
+          onClick={onOpenClientReviews}
         >
           Open client review
         </button>
